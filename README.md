@@ -12,14 +12,17 @@
 ```bash
 pip install -r requirements.txt
 
-# 카테고리 랭킹 대시보드 (현재 MockAdapter 기반)
+# 카테고리 랭킹 대시보드 (사이드바에서 Mock / CSV 소스 선택)
 streamlit run app.py
 
 # 테스트
 pytest
 ```
 
-`streamlit run app.py` 를 실행하면 mock 데이터 기반 카테고리 랭킹이 화면에 뜬다.
+`streamlit run app.py` 실행 후 사이드바에서 데이터 소스를 고른다:
+- **Mock(테스트)** — 가짜 데이터로 랭킹이 바로 뜬다.
+- **CSV(오빠두 연관검색어)** — 네이버 검색광고 연관검색어 스크랩 엑셀에서 내보낸
+  CSV 를 업로드하면 실데이터로 Layer 1 랭킹·4분면이 돈다.
 
 ---
 
@@ -28,7 +31,7 @@ pytest
 ```
 dgk-product-scout/
 ├─ config.py                 # 모든 임계값·요율·경계·가중치 (하드코딩 금지, 설명 주석)
-├─ app.py                    # Streamlit 랭킹 대시보드
+├─ app.py                    # Streamlit 랭킹 대시보드 (Mock/CSV 소스 선택)
 ├─ src/
 │  ├─ schema.py              # 3.4 category_candidate + 원시 관측치 스키마
 │  ├─ signals.py             # 3.2 발굴 신호 8개 산출
@@ -36,9 +39,40 @@ dgk-product-scout/
 │  ├─ ranking.py             # 3.4 후보 생성 + 랭킹 + 함정 필터
 │  └─ adapters/
 │     ├─ base.py             # DataAdapter 인터페이스 (수집부 계약만)
-│     └─ mock_adapter.py     # stub + mock 데이터 (가짜 값 명시)
-└─ tests/                    # pytest (신호·4분면·랭킹)
+│     ├─ mock_adapter.py     # stub + mock 데이터 (가짜 값 명시, 테스트용)
+│     └─ csv_adapter.py      # 오빠두 연관검색어 CSV → 관측치 (실데이터 검증용)
+└─ tests/                    # pytest (신호·4분면·랭킹·CSV)
 ```
+
+## CSVAdapter — 실데이터 검증
+
+오빠두 '네이버 검색광고 연관검색어 스크랩' 엑셀에서 내보낸 CSV 를 입력으로 받는다.
+
+- **기대 컬럼**: 검색키워드 · 연관키워드 · 월검색수(PC) · 월검색수(모바일) ·
+  월평균노출광고수 · 경쟁정도. (헤더명은 `config.CSV_COLUMNS` 에서 조정/별칭 가능)
+- **매핑**:
+  - 신호 7(시장 규모) = `월검색수(PC) + 월검색수(모바일)` — **절대 검색수**.
+  - 신호 8(광고싸움) = `경쟁정도(compIdx)` + `월평균노출광고수(plAvgDepth)`.
+- **소모품 필터**: 연관키워드 중 소모품 토큰(필터·브러시·헤드·봉투·패드 등,
+  `config.CONSUMABLE_KEYWORDS`)이 포함된 것만 남겨 카테고리 후보를 만든다.
+- **저소 표기 처리**: `"< 10"` 같은 부등호 검색량/노출수는 보수적으로
+  `config.LOW_VOLUME_FALLBACK`(=0) 로 치환해 시장 규모를 과대평가하지 않는다.
+- **에러**: 파일 없음 / 필수 컬럼 누락 시 **명시적 예외**를 던진다(어떤 컬럼이 없는지 표시).
+  mock 으로 조용히 폴백하지 않는다.
+
+> ⚠️ **소모품 사전 필터는 근사다.** 부분 문자열 매칭이라 **오검출이 가능**하다
+> (예: 공기청정기 카테고리에 '차량용 필터' 같은 무관한 연관키워드가 섞여 들어올 수 있음).
+> **결과는 사람이 확인해야 한다** — 자동 분류를 그대로 신뢰하지 말 것.
+
+### 신호 7 소스 정정 (데이터랩 → 키워드도구)
+
+신호 7(시장 규모)의 데이터 소스를 **데이터랩 → 검색광고 키워드도구/연관검색어(절대 검색수)** 로
+정정했다. 이유: **데이터랩 검색어트렌드는 상대값(기간 최대=100)** 만 주어 절대 시장 규모에
+쓸 수 없다. 절대 월간검색수는 키워드도구(`monthlyPcQcCnt + monthlyMobileQcCnt`)에서 얻는다.
+데이터랩은 추세·계절성 용도로만 쓴다.
+(설계 스펙 문서 `dgk-product-scout-spec.md` 3.2 표의 신호 7 '데이터 소스'도 동일하게
+"마켓 베스트셀러, **검색광고 키워드도구(절대 검색수)**" 로 갱신 필요 — 본 작업 시점에 해당
+.md 파일이 작업 폴더에 없어 코드/README 에만 반영했다.)
 
 ## 구현 범위 (P1, 스펙 3절)
 
@@ -69,6 +103,16 @@ dgk-product-scout/
 > 교체 시 `src/adapters/base.py` 의 `DataAdapter` 인터페이스를 구현하는 실제 어댑터
 > (예: 쿠팡 API 어댑터, 1688 어댑터)를 만들어 `app.py`/`discover()` 에 주입하면 된다.
 > 신호 산출·4분면·랭킹 로직은 그대로 재사용된다.
+
+### 데이터 소스 로드맵: CSV 검증 → 라이브 API 교체
+
+1. **(현재) CSVAdapter** — 오빠두 연관검색어 CSV 로 신호 7/8·4분면·랭킹이 실데이터에서
+   제대로 도는지 검증한다.
+2. **(다음) 라이브 네이버 API 어댑터** — 검증이 끝나면 동일한 `DataAdapter` 인터페이스로
+   네이버 검색광고 키워드도구(HMAC 서명: `X-Timestamp`/`X-API-KEY`/`X-Customer`/`X-Signature`)
+   를 직접 호출하는 `NaverAdapter` 로 교체한다. 키는 환경변수(`.env`)로 읽고 깃에 커밋하지 않는다.
+   엔드포인트·파라미터·rate limit 은 공식 문서(developers.naver.com,
+   github.com/naver/searchad-apidoc)에서 확인 후 구현한다(추측 금지).
 
 ## 후속 Phase로 보류된 것
 

@@ -117,7 +117,7 @@ def estimate_market_revenue(obs: CategoryObservation) -> float:
 
 
 def market_size_bucket(revenue_est: float) -> str:
-    """추정 매출 → 대/중/소."""
+    """추정 매출(KRW) → 대/중/소."""
     if revenue_est >= config.MARKET_SIZE_LARGE_KRW:
         return "대"
     if revenue_est >= config.MARKET_SIZE_MEDIUM_KRW:
@@ -125,10 +125,41 @@ def market_size_bucket(revenue_est: float) -> str:
     return "소"
 
 
-def signal_7_market_size(obs: CategoryObservation) -> float:
-    # 추정 매출을 '대' 경계 기준으로 0~1 정규화(대 경계 이상이면 만점).
+def market_size_bucket_by_search_volume(search_volume: float) -> str:
+    """월 검색량(절대) → 대/중/소. (CSV/키워드도구 소스용)"""
+    if search_volume >= config.MARKET_SIZE_LARGE_SEARCHVOL:
+        return "대"
+    if search_volume >= config.MARKET_SIZE_MEDIUM_SEARCHVOL:
+        return "중"
+    return "소"
+
+
+def resolve_market_size(obs: CategoryObservation) -> tuple[float, str, str]:
+    """
+    시장 규모를 두 가지 소스 중 가용한 것으로 산출한다.
+
+    - 리뷰×가격 데이터가 있으면(mock 등): '추정매출' 기준(KRW 경계).
+    - 없고 검색량이 있으면(CSV/키워드도구): '검색량' 기준(검색수 경계).
+      ※ 데이터랩 상대값(최대100)이 아니라 키워드도구의 '절대 월간검색수'여야 한다(스펙 3.2).
+
+    반환: (지표값, 기준라벨, 대/중/소 버킷).
+    데이터가 둘 다 없으면 (0, "없음", "소").
+    """
     revenue = estimate_market_revenue(obs)
-    return _linear_score(revenue, strong=config.MARKET_SIZE_LARGE_KRW, weak=0.0)
+    if revenue > 0:
+        return revenue, "추정매출", market_size_bucket(revenue)
+    if obs.category_search_volume:
+        sv = float(obs.category_search_volume)
+        return sv, "검색량", market_size_bucket_by_search_volume(sv)
+    return 0.0, "없음", "소"
+
+
+def signal_7_market_size(obs: CategoryObservation) -> float:
+    # 가용 소스에 맞는 '대' 경계로 0~1 정규화(대 경계 이상이면 만점).
+    metric, basis, _ = resolve_market_size(obs)
+    if basis == "검색량":
+        return _linear_score(metric, strong=config.MARKET_SIZE_LARGE_SEARCHVOL, weak=0.0)
+    return _linear_score(metric, strong=config.MARKET_SIZE_LARGE_KRW, weak=0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -137,8 +168,11 @@ def signal_7_market_size(obs: CategoryObservation) -> float:
 def detect_ad_war(obs: CategoryObservation) -> tuple[bool, list[str]]:
     """
     광고 싸움(우리 불리) 여부 판정(스펙 3.3).
-    세 가지 신호 — 높은 CPC / 브랜드 집중 / 최저가 안 팔림 — 중
-    config.AD_WAR_SIGNAL_COUNT_TO_FLAG 개 이상 충족 시 광고 싸움.
+
+    소스에 따라 평가 가능한 신호가 다르다(없는 필드는 None → 평가 생략):
+      - 마켓/가공 소스: 높은 CPC / 브랜드 집중 / 최저가 안 팔림.
+      - 검색광고 키워드도구·CSV 소스: 경쟁정도(compIdx) / 월평균노출광고수(plAvgDepth).
+    config.AD_WAR_SIGNAL_COUNT_TO_FLAG 개 이상 충족 시 광고 싸움으로 분류한다.
     충족한 사유 리스트도 함께 반환(설명용).
     """
     reasons: list[str] = []
@@ -151,6 +185,11 @@ def detect_ad_war(obs: CategoryObservation) -> tuple[bool, list[str]]:
         and obs.lowest_price_sales_share < config.LOWEST_PRICE_SHARE_FLOOR
     ):
         reasons.append(f"최저가 안 팔림({obs.lowest_price_sales_share:.0%})")
+    # --- 검색광고 키워드도구/CSV 소스 신호 ---
+    if obs.comp_idx is not None and obs.comp_idx in config.COMP_IDX_AD_WAR_VALUES:
+        reasons.append(f"경쟁정도 {obs.comp_idx}")
+    if obs.avg_ad_depth is not None and obs.avg_ad_depth >= config.AD_DEPTH_HIGH_THRESHOLD:
+        reasons.append(f"노출광고 많음({obs.avg_ad_depth:.1f})")
     is_ad_war = len(reasons) >= config.AD_WAR_SIGNAL_COUNT_TO_FLAG
     return is_ad_war, reasons
 
@@ -158,11 +197,26 @@ def detect_ad_war(obs: CategoryObservation) -> tuple[bool, list[str]]:
 def signal_8_winnability(obs: CategoryObservation) -> float:
     """
     진입 가능성 점수: 광고 싸움이면 낮고, 가치 싸움이면 높다.
-    충족된 광고싸움 신호 개수에 비례해 감점(최대 3개 신호).
+    충족된 광고싸움 신호 개수를 '소스별 평가 가능 신호 수'로 정규화해 감점한다.
+    (마켓 소스는 3개, CSV/키워드도구 소스는 2개가 평가 가능)
     """
     _, reasons = detect_ad_war(obs)
-    # 0개 충족 → 1.0, 3개 충족 → 0.0.
-    return _clamp01(1.0 - len(reasons) / 3.0)
+    evaluable = _evaluable_ad_war_count(obs)
+    if evaluable == 0:
+        return 1.0  # 광고싸움을 평가할 데이터가 없으면 감점하지 않음(보류 성격)
+    return _clamp01(1.0 - len(reasons) / evaluable)
+
+
+def _evaluable_ad_war_count(obs: CategoryObservation) -> int:
+    """해당 관측치에서 평가 가능한(값이 채워진) 광고싸움 신호 개수."""
+    fields = (
+        obs.naver_ad_cpc_krw,
+        obs.brand_concentration,
+        obs.lowest_price_sales_share,
+        obs.comp_idx,
+        obs.avg_ad_depth,
+    )
+    return sum(1 for f in fields if f is not None)
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +227,7 @@ def compute_all_signals(obs: CategoryObservation) -> dict:
     신호 1~8 점수 + 4분면 판정에 필요한 파생 메타를 한 번에 산출.
     signal_scores dict(스펙 3.4) 형태로 반환.
     """
-    revenue_est = estimate_market_revenue(obs)
+    market_metric, market_basis, market_bucket = resolve_market_size(obs)
     is_ad_war, ad_war_reasons = detect_ad_war(obs)
     return {
         "signal_1_base_device_popularity": signal_1_base_device_popularity(obs),
@@ -185,8 +239,9 @@ def compute_all_signals(obs: CategoryObservation) -> dict:
         "signal_7_market_size": signal_7_market_size(obs),
         "signal_8_winnability": signal_8_winnability(obs),
         # --- 4분면/설명용 파생 메타 ---
-        "_market_revenue_est": revenue_est,
-        "_market_size_bucket": market_size_bucket(revenue_est),
+        "_market_metric": market_metric,
+        "_market_size_basis": market_basis,   # 추정매출 | 검색량 | 없음
+        "_market_size_bucket": market_bucket,
         "_is_ad_war": is_ad_war,
         "_ad_war_reasons": ad_war_reasons,
     }

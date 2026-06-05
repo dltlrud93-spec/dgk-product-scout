@@ -60,6 +60,9 @@ class CategoryObservation:
     naver_ad_cpc_krw: Optional[float] = None        # 네이버 검색광고 평균 CPC
     brand_concentration: Optional[float] = None     # 상위 매출의 브랜드 집중도(0~1)
     lowest_price_sales_share: Optional[float] = None  # 최저가 상품 매출 점유(0~1)
+    # 검색광고 키워드도구/CSV 소스 전용(마켓 소스에선 None):
+    comp_idx: Optional[str] = None                  # 경쟁정도(compIdx): "낮음" | "중간" | "높음"
+    avg_ad_depth: Optional[float] = None            # 월평균노출광고수(plAvgDepth)
 
 
 @dataclass
