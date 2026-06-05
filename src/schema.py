@@ -64,6 +64,12 @@ class CategoryObservation:
     comp_idx: Optional[str] = None                  # 경쟁정도(compIdx): "낮음" | "중간" | "높음"
     avg_ad_depth: Optional[float] = None            # 월평균노출광고수(plAvgDepth)
 
+    # --- 보조표시용: 기기군 합산을 구성한 개별 연관키워드 내역 ---
+    # 신호 7(시장 규모)을 '기기군 합산'으로 보되, 합산을 구성한 개별 키워드를
+    # 디버그/검토용으로 보존한다. 각 원소: {"keyword": str, "search_volume": int}.
+    # NaverAdapter(시드당 호출)만 채운다. CSV/Mock 등은 빈 리스트.
+    member_keywords: list = field(default_factory=list)
+
 
 @dataclass
 class CategoryCandidate:

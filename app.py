@@ -139,16 +139,26 @@ else:
     #   정규화 점수만으로는 경계 적절성을 못 보므로 원본 검색량/경쟁정도/노출광고수를
     #   점수와 나란히 보여주고, config 경계 대비 실제 분포를 비교한다.
     # -----------------------------------------------------------------------
-    with st.expander("🔍 디버그 — 원본 검색량 & 시장규모 경계 점검", expanded=True):
-        # (1) 원본값 ↔ 정규화 점수 나란히.
-        st.markdown("**원본값(raw) vs 정규화 점수**")
+    with st.expander("🔍 디버그 — 기기군 합산 검색량 & 시장규모 경계 점검", expanded=True):
+        # 벤치마크(대표님 성공사례 기기군 합산) — 후보 합산이 어느 수준인지 가늠용.
+        BENCHMARKS = {"와이퍼": 179_730, "에어컨필터": 346_520}
+
+        # (1) 기기군 합산 ↔ 정규화 점수 나란히 + 벤치마크 대비.
+        st.markdown("**기기군 합산 검색량 vs 정규화 점수**")
+        st.caption(
+            f"벤치마크(기기군 합산): 와이퍼 {BENCHMARKS['와이퍼']:,} · "
+            f"에어컨필터 {BENCHMARKS['에어컨필터']:,} · '대' 경계 "
+            f"{config.MARKET_SIZE_LARGE_SEARCHVOL:,}"
+        )
         debug_rows = []
         for c in candidates:
             s = c.signal_scores
+            agg = s.get("_raw_search_volume") or 0
             debug_rows.append(
                 {
                     "카테고리": c.category_name,
-                    "원본 월검색수(PC+모바일)": s.get("_raw_search_volume"),
+                    "기기군 합산 월검색수": agg,
+                    "와이퍼 대비": f"{agg / BENCHMARKS['와이퍼']:.0%}" if agg else "-",
                     "신호7 점수": round(s.get("signal_7_market_size", 0.0), 3),
                     "시장규모": c.market_size_est,
                     "기준": s.get("_market_size_basis"),
@@ -159,6 +169,33 @@ else:
                 }
             )
         st.dataframe(debug_rows, use_container_width=True, hide_index=True)
+
+        # (1-b) 보조표시: 기기군 합산을 구성한 개별 연관키워드 내역.
+        members_present = [
+            c for c in candidates if c.signal_scores.get("_member_keywords")
+        ]
+        if members_present:
+            st.markdown("**개별 연관키워드 내역 (보조표시 · 합산 구성요소)**")
+            pick = st.selectbox(
+                "기기군 선택",
+                [c.category_name for c in members_present],
+                help="합산이 어떤 개별 키워드로 구성됐는지 — 개별은 작아도 합산은 큰지 확인.",
+            )
+            chosen = next(c for c in members_present if c.category_name == pick)
+            members = chosen.signal_scores.get("_member_keywords", [])
+            agg = chosen.signal_scores.get("_raw_search_volume") or 0
+            st.markdown(
+                f"**{pick}** — 멤버 {len(members)}개, 기기군 합산 **{agg:,}** "
+                f"(개별 최대 {max((m['search_volume'] for m in members), default=0):,})"
+            )
+            st.dataframe(
+                [
+                    {"개별 연관키워드": m["keyword"], "개별 월검색수": m["search_volume"]}
+                    for m in members
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
 
         # (2) 현재 config 경계값(검색량 기준).
         st.markdown("**현재 시장규모 경계 (config, 검색량 기준)**")

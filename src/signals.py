@@ -246,8 +246,10 @@ def compute_all_signals(obs: CategoryObservation) -> dict:
         "_ad_war_reasons": ad_war_reasons,
         # --- 디버그용 원본값(정규화 전 raw) ---
         #   정규화 점수만으로는 경계 적절성을 못 보므로 원본을 함께 노출한다.
-        #   신호 7 = monthlyPcQcCnt + monthlyMobileQcCnt 합(절대 월간검색수).
+        #   신호 7 = '기기군 합산' monthlyPcQcCnt + monthlyMobileQcCnt(절대 월간검색수).
         "_raw_search_volume": obs.category_search_volume,
         "_raw_comp_idx": obs.comp_idx,            # 경쟁정도(낮음/중간/높음)
         "_raw_avg_ad_depth": obs.avg_ad_depth,    # 월평균노출광고수(plAvgDepth)
+        # 보조표시: 기기군 합산을 구성한 개별 연관키워드 내역(NaverAdapter 만 채움).
+        "_member_keywords": obs.member_keywords,
     }

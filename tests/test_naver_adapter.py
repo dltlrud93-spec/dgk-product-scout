@@ -176,68 +176,132 @@ def test_device_guard_excludes_device_keyword():
 
 
 # ---------------------------------------------------------------------------
-# 미귀속 소모품 연관어 → 자체 후보 카테고리(발굴)
+# 기기군 합산: cross-named 소모품도 시드 응답이면 합산 (재설계 핵심)
 # ---------------------------------------------------------------------------
-def test_unattributed_consumable_becomes_standalone_category():
+def test_cross_named_consumable_aggregated_into_device_group():
+    # '헤파필터'는 '공기청정기'를 문자열로 포함하지 않지만, 공기청정기 응답이므로
+    # 그 기기군에 합산돼야 한다(substring 귀속이 아니라 시드 응답 기준).
     def getter(url, params=None, headers=None):
         return FakeResp(
             200,
             {
                 "keywordList": [
-                    _kw("공기청정기 필터", 10000, 10000, 1, "낮음"),  # 시드 귀속
-                    _kw("헤파필터", 30000, 40000, 1, "낮음"),        # 미귀속 → 자체 후보
+                    _kw("공기청정기 필터", 10000, 10000, 1, "낮음"),  # 시드 포함
+                    _kw("헤파필터", 30000, 40000, 1, "낮음"),        # 시드 미포함 → 합산돼야
                     _kw("공기청정기 추천", 9000, 9000, 1, "낮음"),    # 비소모품 → 제외
                 ]
             },
         )
 
     obs = _adapter(["공기청정기"], getter).fetch_category_observations()
-    names = {o.category_name for o in obs}
-    assert "공기청정기 호환 소모품" in names
-    assert "헤파필터" in names
-    hepa = next(o for o in obs if o.category_name == "헤파필터")
-    assert hepa.discovery_pattern == "연관어발굴"
-    assert hepa.category_search_volume == 70000  # 자체 검색량(30000+40000)
-    assert hepa.has_consumable is True
+    # 더는 '연관어발굴' 단독 카테고리를 만들지 않는다 — 시드당 기기군 1건.
+    assert len(obs) == 1
+    o = obs[0]
+    assert o.category_name == "공기청정기 호환 소모품"
+    assert o.discovery_pattern == "호환소모품"
+    # 기기군 합산 = 공기청정기필터(20000) + 헤파필터(70000) = 90000. 비소모품 제외.
+    assert o.category_search_volume == 90000
+    # 보조표시(member_keywords)에 cross-named '헤파필터' 포함.
+    kws = {m["keyword"] for m in o.member_keywords}
+    assert "헤파필터" in kws and "공기청정기 필터" in kws
+    assert sum(m["search_volume"] for m in o.member_keywords) == 90000
 
 
-def test_global_dedupe_across_batches():
-    # 같은 연관어가 여러 배치 응답에 중복 출현해도 1회만 집계(부풀림 방지).
+def test_dedupe_within_seed_response():
+    # 한 시드 응답에 같은 연관어가 중복 출현해도 1회만 합산(부풀림 방지).
     def getter(url, params=None, headers=None):
-        # 어느 배치든 동일 연관어 반환.
+        return FakeResp(
+            200,
+            {
+                "keywordList": [
+                    _kw("공기청정기 필터망", 1000, 1000, 1, "낮음"),
+                    _kw("공기청정기 필터망", 1000, 1000, 1, "낮음"),  # 중복
+                ]
+            },
+        )
+
+    obs = _adapter(["공기청정기"], getter).fetch_category_observations()
+    assert len(obs) == 1
+    assert obs[0].category_search_volume == 2000  # 중복은 1회만
+    assert len(obs[0].member_keywords) == 1
+
+
+def test_same_keyword_under_two_seeds_counts_in_each_group():
+    # 같은 소모품이 서로 다른 시드 응답에 오면 각 기기군의 멤버로 각각 합산(별개 카테고리).
+    def getter(url, params=None, headers=None):
         return FakeResp(200, {"keywordList": [_kw("필터망", 1000, 1000, 1, "낮음")]})
 
-    obs = _adapter(["로봇청소기", "공기청정기"], getter, batch_size=1).fetch_category_observations()
-    standalone = [o for o in obs if o.category_name == "필터망"]
-    assert len(standalone) == 1  # 두 배치에서 와도 하나로 dedupe.
-    assert standalone[0].category_search_volume == 2000  # 중복 합산 안 됨.
+    obs = _adapter(["로봇청소기", "공기청정기"], getter).fetch_category_observations()
+    assert {o.category_name for o in obs} == {"로봇청소기 호환 소모품", "공기청정기 호환 소모품"}
+    for o in obs:
+        assert o.category_search_volume == 2000
 
 
 # ---------------------------------------------------------------------------
-# 배치 분할 + 호출 간 rate limit sleep
+# 시드당 1회 호출(멀티시드 배치 폐기) + 호출 간 rate limit sleep
 # ---------------------------------------------------------------------------
-def test_batch_splitting_seven_seeds_two_calls():
+def test_per_seed_one_call_each():
     calls = []
     sleeps = []
 
     def getter(url, params=None, headers=None):
-        calls.append(params["hintKeywords"].split(","))
+        calls.append(params["hintKeywords"])
         return FakeResp(200, {"keywordList": []})
 
     seeds = [f"키워드{i}" for i in range(7)]
     a = NaverAdapter(seeds, **KEYS, http_get=getter, sleep=lambda s: sleeps.append(s))
     a.fetch_category_observations()
 
-    # 7개 시드, 배치 5 → 2회 호출(5 + 2).
-    assert len(calls) == 2
-    assert [len(c) for c in calls] == [5, 2]
-    # 호출 간 rate limit sleep 1회(배치 2개 사이).
-    assert sleeps == [config.NAVER_AD_RATE_LIMIT_SECONDS]
+    # 멀티시드 배치 폐기 → 시드당 1회 호출(7개 → 7회), 호출당 hint 는 항상 1개.
+    assert calls == seeds
+    # 호출 간 rate limit sleep 6회(7호출 사이).
+    assert sleeps == [config.NAVER_AD_RATE_LIMIT_SECONDS] * 6
 
 
 def test_rate_limit_default_is_generous():
     # 키 차단 방지: 기본 sleep 은 넉넉히(>= 0.3초).
     assert config.NAVER_AD_RATE_LIMIT_SECONDS >= 0.3
+
+
+# ---------------------------------------------------------------------------
+# 기기군 합산 → 시장규모 4분면 분류 (경계 15만/3만 기준)
+# ---------------------------------------------------------------------------
+def test_large_aggregate_classified_as_dae():
+    from src.ranking import discover
+
+    def getter(url, params=None, headers=None):
+        # 기기군 합산 = (80000+80000)+(20000+20000) = 200000 ≥ 150000 → '대'.
+        return FakeResp(
+            200,
+            {
+                "keywordList": [
+                    _kw("에어컨 필터", 80000, 80000, 1, "낮음"),
+                    _kw("에어컨필터 리필", 20000, 20000, 1, "낮음"),
+                ]
+            },
+        )
+
+    ranked = discover(_adapter(["에어컨"], getter))
+    assert ranked[0].market_size_est == "대"
+
+
+def test_small_aggregate_stays_so():
+    from src.ranking import discover
+
+    def getter(url, params=None, headers=None):
+        # 기기군 합산 = (5000+5000)+(3000+3000) = 16000 < 30000 → '소'.
+        return FakeResp(
+            200,
+            {
+                "keywordList": [
+                    _kw("미니 필터", 5000, 5000, 1, "낮음"),
+                    _kw("미니필터 리필", 3000, 3000, 1, "낮음"),
+                ]
+            },
+        )
+
+    ranked = discover(_adapter(["미니가습기"], getter))
+    assert ranked[0].market_size_est == "소"
 
 
 # ---------------------------------------------------------------------------
