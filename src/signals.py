@@ -244,4 +244,10 @@ def compute_all_signals(obs: CategoryObservation) -> dict:
         "_market_size_bucket": market_bucket,
         "_is_ad_war": is_ad_war,
         "_ad_war_reasons": ad_war_reasons,
+        # --- 디버그용 원본값(정규화 전 raw) ---
+        #   정규화 점수만으로는 경계 적절성을 못 보므로 원본을 함께 노출한다.
+        #   신호 7 = monthlyPcQcCnt + monthlyMobileQcCnt 합(절대 월간검색수).
+        "_raw_search_volume": obs.category_search_volume,
+        "_raw_comp_idx": obs.comp_idx,            # 경쟁정도(낮음/중간/높음)
+        "_raw_avg_ad_depth": obs.avg_ad_depth,    # 월평균노출광고수(plAvgDepth)
     }

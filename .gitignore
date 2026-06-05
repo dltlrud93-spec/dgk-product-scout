@@ -9,3 +9,6 @@ env/
 .streamlit/secrets.toml
 *.sqlite
 *.db
+
+# 네이버 검색광고 API 키 등 비밀값(.env.example 은 커밋 OK, .env 는 금지)
+.env
