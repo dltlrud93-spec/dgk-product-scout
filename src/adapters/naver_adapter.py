@@ -49,19 +49,14 @@ import base64
 import hashlib
 import hmac
 import os
-import statistics
 import time
 from typing import Callable, Optional
 
 import config
 from src.adapters.base import DataAdapter
 
-# CSVAdapter 와 동일한 소모품/파싱/집계 로직을 재사용한다(중복 정의·로직 분기 방지).
-from src.adapters.csv_adapter import (
-    _aggregate_comp_idx,
-    _is_consumable,
-    _parse_volume,
-)
+# per-seed 기기군 합산(dedupe·소모품 필터·합산)은 공통 코어로 추출됨(계절·차종 공용).
+from src.core.search_volume import aggregate_seed
 from src.schema import CategoryObservation
 
 # --- 응답 필드명(공식 RelKwdStat 응답 키) ---------------------------------
@@ -219,27 +214,15 @@ class NaverAdapter(DataAdapter):
             )
 
     # ----- 수확 → 기기군 합산 카테고리 -----
-    def _make_device_group(self, seed: str, items: list[dict]) -> CategoryObservation:
-        """한 시드의 소모품 연관어(items)를 '기기군 합산'으로 집계해 CategoryObservation."""
-        # 멤버별 개별 검색량(PC+모바일)을 먼저 구해 보조표시용으로도 보존한다.
-        members: list[dict] = []
-        for it in items:
-            rel = str(it.get(_FIELD_REL_KEYWORD) or "").strip()
-            vol = int(
-                _parse_volume(it.get(_FIELD_MONTHLY_PC))
-                + _parse_volume(it.get(_FIELD_MONTHLY_MOBILE))
-            )
-            members.append({"keyword": rel, "search_volume": vol})
-        # 신호 7: '기기군 합산' 절대 월검색수(개별 키워드들을 모두 합산).
-        search_volume = sum(m["search_volume"] for m in members)
-        # 신호 8: 평균 노출광고수 + 대표 경쟁정도(멤버 집계).
-        ad_depths = [_parse_volume(it.get(_FIELD_AD_DEPTH)) for it in items]
-        avg_ad_depth = statistics.mean(ad_depths) if ad_depths else None
-        comp_idx = _aggregate_comp_idx(
-            [str(it.get(_FIELD_COMP_IDX) or "") for it in items]
-        )
-        # 검색량 큰 멤버부터 보이도록 정렬(보조표시 가독성).
-        members.sort(key=lambda m: m["search_volume"], reverse=True)
+    # 합산 로직 자체는 src.core.search_volume 로 추출됨(계절·차종 공용). 여기서는
+    # 코어 결과를 CategoryObservation 으로 감싸기만 한다(신호 매핑 — 동작 동일).
+    def _build_observation(self, seed: str, agg: dict) -> CategoryObservation:
+        """코어 aggregate_seed 결과(agg)를 CategoryObservation(신호 7/8)으로 변환."""
+        # 보조표시 member_keywords 스키마({keyword, search_volume})는 그대로 유지.
+        members = [
+            {"keyword": m["relKeyword"], "search_volume": m["volume"]}
+            for m in agg["member_keywords"]
+        ]
         return CategoryObservation(
             category_name=f"{seed} 호환 소모품",
             discovery_pattern="호환소모품",
@@ -254,32 +237,33 @@ class NaverAdapter(DataAdapter):
             # 신호 6: 스펙상 "거의 항상 충족" → True 가정(문서화된 가정).
             oem_producible=True,
             # 신호 7 입력 = 기기군 합산 검색량.
-            category_search_volume=int(search_volume),
+            category_search_volume=int(agg["total_volume"]),
             # 신호 8 입력.
-            comp_idx=comp_idx,
-            avg_ad_depth=avg_ad_depth,
+            comp_idx=agg["comp_idx"],
+            avg_ad_depth=agg["avg_ad_depth"],
             # 보조표시: 합산을 구성한 개별 연관키워드 내역.
             member_keywords=members,
         )
+
+    def _make_device_group(self, seed: str, items: list[dict]) -> CategoryObservation:
+        """한 시드의 소모품 연관어(items)를 '기기군 합산'으로 집계해 CategoryObservation.
+
+        합산은 코어(aggregate_seed)에 위임. items 가 이미 소모품으로 걸러진 경우에도
+        aggregate_seed 의 dedupe/필터는 멱등이라 결과가 동일하다(기존 동작 보존).
+        """
+        return self._build_observation(seed, aggregate_seed(items))
 
     # ----- 인터페이스 구현 -----
     def fetch_category_observations(self) -> list[CategoryObservation]:
         # 시드당 1회 호출(멀티시드 배치 폐기 — per-seed 합산을 위해 필수).
         # 호출 간 rate limit sleep, 429 백오프는 _request_keywordstool 가 처리.
+        # dedupe·소모품 필터·합산은 코어(aggregate_seed)가 수행(단일 출처).
         observations: list[CategoryObservation] = []
         for i, seed in enumerate(self.seed_keywords):
             if i > 0:
                 self._sleep(self.rate_limit_seconds)  # 호출 간 rate limit
-            # 응답 = 이 시드의 연관어들. 같은 연관어 중복 출현은 1회만(부풀림 방지).
-            seen: dict[str, dict] = {}
-            for item in self._request_keywordstool([seed]):
-                rel = str(item.get(_FIELD_REL_KEYWORD) or "").strip()
-                if rel and rel not in seen:
-                    seen[rel] = item
-            # 소모품 사전+기기 가드 통과한 연관어 전부가 이 시드의 기기군 멤버.
-            #   ('워셔액'처럼 시드를 문자열로 포함하지 않아도, 시드 응답이므로 포함됨)
-            consumables = [it for rel, it in seen.items() if _is_consumable(rel)]
-            if not consumables:
+            agg = aggregate_seed(self._request_keywordstool([seed]))
+            if not agg["member_keywords"]:
                 continue  # 소모품 연관어가 없으면 기기군 후보 아님
-            observations.append(self._make_device_group(seed, consumables))
+            observations.append(self._build_observation(seed, agg))
         return observations
