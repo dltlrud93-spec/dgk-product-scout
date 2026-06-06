@@ -34,6 +34,12 @@
     {"canonical": "액센트", "maker": "현대", "aliases": ["액센트"], "note": ""},
     {"canonical": "포터", "maker": "현대", "aliases": ["포터", "포터2", "포터EV"], "note": "상용"},
 
+    {"canonical": "제네시스G70", "maker": "제네시스", "aliases": ["G70", "제네시스G70"], "note": "2017~ (C-2 누락 보강)"},
+    {"canonical": "제네시스G80", "maker": "제네시스", "aliases": ["G80", "제네시스G80"], "note": "2016~ (DH/RG3 세대 분리 검토)"},
+    {"canonical": "제네시스G90", "maker": "제네시스", "aliases": ["G90", "제네시스G90", "EQ900"], "note": "2015~ (구 EQ900)"},
+    {"canonical": "제네시스GV70", "maker": "제네시스", "aliases": ["GV70", "제네시스GV70"], "note": "2020~"},
+    {"canonical": "제네시스GV80", "maker": "제네시스", "aliases": ["GV80", "제네시스GV80"], "note": "2020~"},
+
     {"canonical": "모닝TA", "maker": "기아", "aliases": ["모닝TA", "올뉴모닝"], "note": "2011~2017 (매핑 검증)"},
     {"canonical": "모닝JA", "maker": "기아", "aliases": ["모닝JA", "더뉴모닝"], "note": "2017~"},
     {"canonical": "레이", "maker": "기아", "aliases": ["레이", "더뉴레이"], "note": "짧은 별칭 — 오매칭 주의"},

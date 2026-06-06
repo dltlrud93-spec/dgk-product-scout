@@ -28,9 +28,34 @@ _DATA_PATH = os.path.join(
 # 정규화: 공백·하이픈 제거 + 영문 대문자화(한글은 영향 없음). "쏘렌토 MQ4"="쏘렌토MQ4", "CR-V"="CRV".
 _STRIP_RE = re.compile(r"[\s\-]+")
 
+# 단축 별칭 오매칭 가드: 길이 ≤ 이 값인 별칭은 'substring' 이 아니라 '토큰 경계' 매칭만 인정.
+# 짧은 별칭(마스터·레이·G80·A4 등)이 더 긴 비차종어(마스터실린더·디스플레이…)의 부분문자열로
+# 잘못 잡히는 것을 막는다. 긴 별칭(세대 포함 등)은 substring 으로 둔다(꼬리 표기 흡수).
+SHORT_ALIAS_MAXLEN = 3
+
 
 def normalize_text(s: str) -> str:
     return _STRIP_RE.sub("", str(s or "")).upper()
+
+
+def _boundary_contains(needle: str, hay: str) -> bool:
+    """needle 이 hay 안에 '영숫자(한글 포함) 경계'로 등장하는가. 양옆이 글자면 거부.
+
+    한글 음절은 str.isalnum()==True 라, '마스터실린더'에서 '마스터'는 우측이 '실'(글자)→거부.
+    '마스터'(잔여=별칭) 또는 'G80'(앞뒤 경계)처럼 경계에 닿을 때만 인정.
+    """
+    n = len(needle)
+    start = 0
+    while True:
+        i = hay.find(needle, start)
+        if i < 0:
+            return False
+        j = i + n
+        left_ok = (i == 0) or (not hay[i - 1].isalnum())
+        right_ok = (j == len(hay)) or (not hay[j].isalnum())
+        if left_ok and right_ok:
+            return True
+        start = i + 1
 
 
 @dataclass
@@ -84,9 +109,13 @@ class CarModelIndex:
         (예: '와이퍼블레이드' 안의 '레이'). 떼고 매칭해야 오매칭을 막는다.
         """
         residual = self.strip_parts(keyword)
-        # 1) 세대 포함 별칭(긴 것 우선).
+        # 1) 세대 포함 별칭(긴 것 우선). 짧은 별칭은 토큰 경계 매칭만 인정(오매칭 가드).
         for al in self._aliases_desc:
-            if al and al in residual:
+            if not al:
+                continue
+            hit = (_boundary_contains(al, residual) if len(al) <= SHORT_ALIAS_MAXLEN
+                   else al in residual)
+            if hit:
                 return Recognition(self.alias_to_canonical[al], False, al)
         # 2) bare family → 모호 버킷(임의 세대 귀속 금지).
         for fam in self._bare_desc:
