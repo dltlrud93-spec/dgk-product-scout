@@ -1,0 +1,90 @@
+{
+ "차량용햇빛가리개": {
+  "relKeyword": "차량용햇빛가리개",
+  "monthlyPcQcCnt": 3320,
+  "monthlyMobileQcCnt": 17500,
+  "plAvgDepth": 8,
+  "compIdx": "중간",
+  "monthlyAvePcClkCnt": 40.4,
+  "monthlyAveMobileClkCnt": 321.8,
+  "monthlyAvePcCtr": 1.45,
+  "monthlyAveMobileCtr": 2.15
+ },
+ "차량용선풍기": {
+  "relKeyword": "차량용선풍기",
+  "monthlyPcQcCnt": 3530,
+  "monthlyMobileQcCnt": 19600,
+  "plAvgDepth": 8,
+  "compIdx": "중간",
+  "monthlyAvePcClkCnt": 11.3,
+  "monthlyAveMobileClkCnt": 417.6,
+  "monthlyAvePcCtr": 0.4,
+  "monthlyAveMobileCtr": 2.6
+ },
+ "워셔액": {
+  "relKeyword": "워셔액",
+  "monthlyPcQcCnt": 4350,
+  "monthlyMobileQcCnt": 16000,
+  "plAvgDepth": 8,
+  "compIdx": "중간",
+  "monthlyAvePcClkCnt": 30.4,
+  "monthlyAveMobileClkCnt": 251.0,
+  "monthlyAvePcCtr": 0.74,
+  "monthlyAveMobileCtr": 1.53
+ },
+ "와이퍼": {
+  "relKeyword": "와이퍼",
+  "monthlyPcQcCnt": 4630,
+  "monthlyMobileQcCnt": 14800,
+  "plAvgDepth": 8,
+  "compIdx": "중간",
+  "monthlyAvePcClkCnt": 59.3,
+  "monthlyAveMobileClkCnt": 460.2,
+  "monthlyAvePcCtr": 1.37,
+  "monthlyAveMobileCtr": 3.05
+ },
+ "자동차에어컨필터": {
+  "relKeyword": "자동차에어컨필터",
+  "monthlyPcQcCnt": 3460,
+  "monthlyMobileQcCnt": 18500,
+  "plAvgDepth": 8,
+  "compIdx": "중간",
+  "monthlyAvePcClkCnt": 35.0,
+  "monthlyAveMobileClkCnt": 352.8,
+  "monthlyAvePcCtr": 1.04,
+  "monthlyAveMobileCtr": 1.93
+ },
+ "엔진오일": {
+  "relKeyword": "엔진오일",
+  "monthlyPcQcCnt": 8950,
+  "monthlyMobileQcCnt": 35300,
+  "plAvgDepth": 10,
+  "compIdx": "높음",
+  "monthlyAvePcClkCnt": 36.4,
+  "monthlyAveMobileClkCnt": 315.4,
+  "monthlyAvePcCtr": 0.43,
+  "monthlyAveMobileCtr": 0.92
+ },
+ "발수코팅제": {
+  "relKeyword": "발수코팅제",
+  "monthlyPcQcCnt": 1530,
+  "monthlyMobileQcCnt": 6720,
+  "plAvgDepth": 8,
+  "compIdx": "높음",
+  "monthlyAvePcClkCnt": 14.7,
+  "monthlyAveMobileClkCnt": 120.9,
+  "monthlyAvePcCtr": 1.03,
+  "monthlyAveMobileCtr": 1.89
+ },
+ "성에제거기": {
+  "relKeyword": "성에제거기",
+  "monthlyPcQcCnt": 10,
+  "monthlyMobileQcCnt": 20,
+  "plAvgDepth": 8,
+  "compIdx": "높음",
+  "monthlyAvePcClkCnt": 0.0,
+  "monthlyAveMobileClkCnt": 0.3,
+  "monthlyAvePcCtr": 0.0,
+  "monthlyAveMobileCtr": 0.87
+ }
+}

@@ -131,14 +131,16 @@ def _norm(kw: str) -> str:
     return "".join(str(kw).split())
 
 
-def fetch_single_volumes(keywords: list[str]) -> dict[str, dict]:
+def fetch_single_volumes(keywords: list[str], *, adapter=None) -> dict[str, dict]:
     """
     각 키워드의 '단일' 월검색량(monthlyPcQcCnt + monthlyMobileQcCnt). 연관어 합산 아님.
 
     keywordList 에서 relKeyword 가 '정확히 일치'하는 행만 그 키워드 값으로 쓴다(exact-match
     라 hint 5개 배치해도 섞이지 않음). 반환: {키워드: {"volume": int|None, "low": bool}}.
+    adapter 주입 시 그것을 사용(테스트의 결정론 fixture 주입용), 없으면 라이브 NaverAdapter.
     """
-    adapter = NaverAdapter(keywords)  # 생성자가 NAVER_AD_* 키 검증.
+    if adapter is None:
+        adapter = NaverAdapter(keywords)  # 생성자가 NAVER_AD_* 키 검증.
     by_norm: dict[str, dict] = {}
     for i in range(0, len(keywords), _KEYWORDS_PER_AD_CALL):
         chunk = keywords[i:i + _KEYWORDS_PER_AD_CALL]
@@ -181,12 +183,15 @@ def _vol_num(rec: dict) -> int:
 # 계절 '모양': 데이터랩 수집 + 지표 계산
 # ─────────────────────────────────────────────────────────────────────────────
 
-def fetch_shape(season_keywords: dict[str, list[str]], cid: str, csec: str) -> dict[str, dict]:
+def fetch_shape(season_keywords: dict[str, list[str]], cid: str, csec: str,
+                *, request_datalab=None) -> dict[str, dict]:
     """
     데이터랩 검색어트렌드로 키워드별 월별 ratio 수집(계절성용). 그룹 5개/요청 배치.
 
     0단계 모듈의 _request_datalab/상수만 재사용(파일 무수정). 반환: {kw: {season, periods, ratios}}.
+    request_datalab 주입 시 그것을 사용(테스트의 결정론 fixture 주입용).
     """
+    req = request_datalab or s0._request_datalab
     flat = [(kw, season) for season, kws in season_keywords.items() for kw in kws]
     season_of = {kw: s for kw, s in flat}
     out: dict[str, dict] = {}
@@ -195,7 +200,7 @@ def fetch_shape(season_keywords: dict[str, list[str]], cid: str, csec: str) -> d
         groups = [{"groupName": kw, "keywords": [kw]} for kw, _ in chunk]
         if i > 0:
             time.sleep(s0._RATE_LIMIT_SECONDS)
-        resp = s0._request_datalab(groups, cid, csec)
+        resp = req(groups, cid, csec)
         for result in resp.get("results", []):
             kw = result.get("title", "")
             data = result.get("data", [])
@@ -363,7 +368,33 @@ def print_summary(rows: list[dict], sort_by: str, apply_filter: bool) -> None:
                   f"규모 {_fmt_volume(r['volume']):>10}  ← {'+'.join(why)} 미달")
 
     print("\n  [주의] 규모는 '단일 키워드' 월검색량(기기군 합산 아님 — B-1 되돌림). "
-          "겨울 시즌코어 합산은 보류. 발주 데드라인 미포함. 임계 미확정 시 규모 필터 보류.")
+          "발주 데드라인 미포함.")
+
+
+def print_winter_reference(bundle: list[str], *, adapter=None) -> None:
+    """
+    B-6 #6 참고 섹션: '겨울 케어 묶음'을 합산 척도로 별도 표시(본표와 절대 섞지 않음).
+
+    합산 코어(src.core.search_volume)를 겨울 시드에만 적용 → 시드별 기기군 합산 + 총합.
+    ★척도 충돌 주의: 이 숫자는 '합산 척도'다. 위 본표('단일 척도') 숫자와 합치거나 비교 금지.
+    """
+    from src.core.search_volume import fetch_aggregated_volume  # 코어 합산(겨울 시드 한정)
+
+    agg = fetch_aggregated_volume(bundle, adapter=adapter)
+    print("\n" + "=" * 78)
+    print("참고: 겨울 케어 묶음 (합산 척도, 본표와 별도) — 단일 척도 본표 숫자와 섞지 말 것")
+    print("=" * 78)
+    print(f"  {'겨울 시드':<12} {'기기군 합산':>12} {'멤버수':>5}")
+    print(f"  {'-'*12} {'-'*12} {'-'*5}")
+    total = 0
+    for seed in bundle:
+        a = agg.get(seed, {})
+        vol = int(a.get("total_volume", 0))
+        total += vol
+        print(f"  {seed:<12} {vol:>12,} {len(a.get('member_keywords', [])):>5}")
+    print(f"  {'-'*12} {'-'*12}")
+    print(f"  {'겨울 합산':<12} {total:>12,}")
+    print("  (합산 코어 _is_consumable 기준. 단일 척도 본표와 별개의 참고 지표.)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -482,6 +513,10 @@ def main() -> None:
         print_summary(rows, sort_by, apply_filter)
     else:
         print("분석 가능한 키워드가 없습니다(계절 시계열이 모두 비어 있음).")
+
+    # B-6 #6: 겨울 케어 묶음 합산 참고 섹션(본표와 분리, 합산 척도).
+    print("\n검색광고에서 겨울 케어 묶음 합산 수집 중...")
+    print_winter_reference(WINTER_CARE_BUNDLE)
 
 
 if __name__ == "__main__":
