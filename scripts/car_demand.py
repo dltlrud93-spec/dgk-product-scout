@@ -140,6 +140,25 @@ def _print_limits(thr_text: str) -> None:
     print(f"   · 규모(검색광고 절대값)와 추세(데이터랩)는 별도 컬럼 — 합산/단일점수 없음. {thr_text}")
 
 
+def render_table(rows, trends, title):
+    """규모·추세 별도 컬럼 표 한 장(세 뷰 공용). 합산검색량(규모)과 추세는 각자 칸 —
+    합쳐 단일 매력도 점수로 만들지 않는다. 추세 칸은 저신뢰면 방향만(비율 숨김)."""
+    print("\n" + "─" * 92)
+    print(title)
+    print(f"  {'정규명':<16} {'부품유형':<8} {'합산검색량':>9} {'멤버':>4} {'추세':>12} {'신뢰도':<6}")
+    print(f"  {'-'*16} {'-'*8} {'-'*9} {'-'*4} {'-'*12} {'-'*6}")
+    for r in rows:
+        t = trends.get(r.canonical)
+        if t is None:
+            cell, conf = "데이터부족", "저신뢰"
+        else:
+            lc = _low_conf(r, t)
+            cell, conf = _trend_cell(t, lc), ("저신뢰" if lc else "정상")
+        tag = " (세대미상)" if r.ambiguous else ""
+        print(f"  {r.canonical:<16} {r.part_type:<8} {r.volume:>9,} {r.members:>4} "
+              f"{cell:>12} {conf:<6}{tag}")
+
+
 def _sort_rows(rows, trends, sort_by):
     if sort_by != "trend":
         return sorted(rows, key=lambda r: r.volume, reverse=True)
@@ -182,32 +201,16 @@ def main() -> None:
     print(f"데이터랩에서 모델 추세 수집 중... (모델 {len(canon_kw)}개)")
     trends = fetch_trends(canon_kw, cid, csec)
 
-    def render(rowlist, title):
-        print("\n" + "─" * 92)
-        print(title)
-        print(f"  {'정규명':<16} {'부품유형':<8} {'합산검색량':>9} {'멤버':>4} {'추세':>12} {'신뢰도':<6}")
-        print(f"  {'-'*16} {'-'*8} {'-'*9} {'-'*4} {'-'*12} {'-'*6}")
-        for r in rowlist:
-            t = trends.get(r.canonical)
-            if t is None:
-                cell, conf = "데이터부족", "저신뢰"
-            else:
-                lc = _low_conf(r, t)
-                cell, conf = _trend_cell(t, lc), ("저신뢰" if lc else "정상")
-            tag = " (세대미상)" if r.ambiguous else ""
-            print(f"  {r.canonical:<16} {r.part_type:<8} {r.volume:>9,} {r.members:>4} "
-                  f"{cell:>12} {conf:<6}{tag}")
-
     if rising_view:
         rising = [r for r in rows
                   if (t := trends.get(r.canonical)) and (t.new_candidate or t.direction == "↑")]
-        render(_sort_rows(rising, trends, "trend"),
-               "[뷰] 떠오르는 신차 후보 = 추세 ↑ 또는 신규 후보 (단순 필터 — 점수 합산 아님)")
+        render_table(_sort_rows(rising, trends, "trend"), trends,
+                     "[뷰] 떠오르는 신차 후보 = 추세 ↑ 또는 신규 후보 (단순 필터 — 점수 합산 아님)")
         print(f"\n  → 후보 {len(rising)}행")
         return
 
-    render(_sort_rows(rows, trends, sort_by),
-           f"본표 (정렬: {'추세순' if sort_by == 'trend' else '규모순'})")
+    render_table(_sort_rows(rows, trends, sort_by), trends,
+                 f"본표 (정렬: {'추세순' if sort_by == 'trend' else '규모순'})")
     n_new = sum(1 for r in rows if (t := trends.get(r.canonical)) and t.new_candidate)
     n_up = sum(1 for r in rows if (t := trends.get(r.canonical)) and t.direction == "↑")
     print(f"\n  → {len(rows)}행 · 신규 후보 {n_new} · 상승↑ {n_up}  "

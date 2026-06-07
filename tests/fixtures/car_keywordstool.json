@@ -1,0 +1,29 @@
+{
+  "_comment": "Phase C-5 차종 스캐너 unit test 스냅샷. 검색광고 키워드도구 keywordList 를 시드별로 고정(라이브 미호출). 6케이스(별칭 정규화·비모델 버림·모델합산·랭킹컷·추세·별도컬럼)를 결정론으로 커버하도록 설계한 합성 응답.",
+  "자동차에어컨필터": [
+    {"relKeyword": "아반떼CN7에어컨필터", "monthlyPcQcCnt": 300, "monthlyMobileQcCnt": 500, "plAvgDepth": 8, "compIdx": "중간"},
+    {"relKeyword": "더뉴아반떼CN7캐빈필터", "monthlyPcQcCnt": 120, "monthlyMobileQcCnt": 180, "plAvgDepth": 7, "compIdx": "중간"},
+    {"relKeyword": "아반떼AD에어컨필터", "monthlyPcQcCnt": 200, "monthlyMobileQcCnt": 300, "plAvgDepth": 6, "compIdx": "중간"},
+    {"relKeyword": "아반떼MD캐빈필터", "monthlyPcQcCnt": 100, "monthlyMobileQcCnt": 150, "plAvgDepth": 5, "compIdx": "낮음"},
+    {"relKeyword": "아반떼에어컨필터", "monthlyPcQcCnt": 600, "monthlyMobileQcCnt": 900, "plAvgDepth": 9, "compIdx": "높음"},
+    {"relKeyword": "제네시스G80캐빈필터", "monthlyPcQcCnt": 150, "monthlyMobileQcCnt": 250, "plAvgDepth": 6, "compIdx": "중간"},
+    {"relKeyword": "쏘렌토MQ4에어컨필터", "monthlyPcQcCnt": 400, "monthlyMobileQcCnt": 600, "plAvgDepth": 7, "compIdx": "중간"},
+    {"relKeyword": "워셔액", "monthlyPcQcCnt": 4350, "monthlyMobileQcCnt": 16000, "plAvgDepth": 8, "compIdx": "중간"},
+    {"relKeyword": "불스원", "monthlyPcQcCnt": 500, "monthlyMobileQcCnt": 800, "plAvgDepth": 4, "compIdx": "낮음"},
+    {"relKeyword": "디스플레이오디오", "monthlyPcQcCnt": 300, "monthlyMobileQcCnt": 400, "plAvgDepth": 3, "compIdx": "낮음"},
+    {"relKeyword": "마스터실린더", "monthlyPcQcCnt": 200, "monthlyMobileQcCnt": 300, "plAvgDepth": 2, "compIdx": "낮음"},
+    {"relKeyword": "위닉스공기청정기", "monthlyPcQcCnt": 1000, "monthlyMobileQcCnt": 2000, "plAvgDepth": 5, "compIdx": "중간"}
+  ],
+  "캐빈필터": [
+    {"relKeyword": "아반떼CN7에어컨필터", "monthlyPcQcCnt": 9999, "monthlyMobileQcCnt": 9999, "plAvgDepth": 9, "compIdx": "높음"}
+  ],
+  "와이퍼": [
+    {"relKeyword": "아반떼CN7와이퍼", "monthlyPcQcCnt": 250, "monthlyMobileQcCnt": 400, "plAvgDepth": 7, "compIdx": "중간"},
+    {"relKeyword": "투싼NX4와이퍼", "monthlyPcQcCnt": 399, "monthlyMobileQcCnt": 600, "plAvgDepth": 6, "compIdx": "중간"},
+    {"relKeyword": "와이퍼블레이드", "monthlyPcQcCnt": 800, "monthlyMobileQcCnt": 1200, "plAvgDepth": 8, "compIdx": "중간"}
+  ],
+  "와이퍼블레이드": [
+    {"relKeyword": "아반떼CN7와이퍼블레이드", "monthlyPcQcCnt": 100, "monthlyMobileQcCnt": 150, "plAvgDepth": 7, "compIdx": "중간"},
+    {"relKeyword": "레이와이퍼", "monthlyPcQcCnt": 700, "monthlyMobileQcCnt": 1100, "plAvgDepth": 8, "compIdx": "높음"}
+  ]
+}
