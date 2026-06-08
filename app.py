@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import pathlib
 import sys
+from datetime import date, datetime, timedelta, timezone
 
 import streamlit as st
 
@@ -58,6 +59,36 @@ def _fmt_vol_display(vol: int, low: bool) -> str:
     """표시 전용 검색량 포맷. low(원래 '< 10')면 '<10', 아니면 천단위 콤마.
     ★숫자를 만들어내지 않는다 — '<10' 은 네이버가 정확값을 안 주는 항목의 표시일 뿐."""
     return "<10" if low else f"{vol:,}"
+
+
+_KST = timezone(timedelta(hours=9))
+
+
+def _kst_today() -> date:
+    """오늘 날짜(KST). 발주 데드라인은 캐시(_load_seasonal)와 무관하게 매 렌더 현재 날짜로 계산."""
+    return datetime.now(_KST).date()
+
+
+def order_deadline_status(rising_month: int, today: date) -> tuple[date, str]:
+    """수요 상승월(1~12) → (가장 가까운 미래 발주 마감일, 상태 텍스트).
+
+    마감일 = 상승월 1일 − 리드타임(config.LEAD_TIME_TOTAL_DAYS, 89일).
+    올해 마감이 이미 지났으면 '🔴 늦음' + 마감일은 내년 기준(가장 가까운 미래)을 반환.
+    상태는 추천 필터와 무관하게 행마다 계산된다(필터 OFF 면 전 상품 상태가 보임).
+    """
+    total = config.LEAD_TIME_TOTAL_DAYS
+    this_year = date(today.year, rising_month, 1) - timedelta(days=total)
+    if this_year < today:                       # 올해 발주 적기 지남 → 늦음(내년 대비).
+        next_year = date(today.year + 1, rising_month, 1) - timedelta(days=total)
+        return next_year, "🔴 이미 늦음(내년 대비)"
+    days = (this_year - today).days
+    if days <= config.ORDER_STATUS_PRIME_DAYS:
+        status = "🟢 지금 발주 적기"
+    elif days <= config.ORDER_STATUS_SOON_DAYS:
+        status = "🟡 임박"
+    else:
+        status = "⚪ 아직 이름"
+    return this_year, status
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -344,8 +375,14 @@ _SEASON_LIMITS_MD = (
     "그 미만 상시.\n\n"
     "· 규모 = '단일 키워드' 월검색량(PC+모바일). ★차종 수요는 '여러 연관어 합산' 척도라 "
     "**척도가 다릅니다** — 두 화면의 검색량 숫자를 직접 비교하지 마세요.\n\n"
-    f"· 추천 필터 = 규모 ≥ {config.MARKET_SIZE_THRESHOLD:,} AND 계절성 ≥ {sc.FILTER_MIN_INDEX}. "
-    "발주 데드라인은 미포함."
+    f"· 발주 데드라인 = 상승월 1일 − 리드타임 {config.LEAD_TIME_TOTAL_DAYS}일"
+    f"(중국 {config.LEAD_TIME_CHINA_DAYS} + 국내 {config.LEAD_TIME_KOREA_DAYS} + 버퍼 "
+    f"{config.LEAD_TIME_BUFFER_DAYS}) 역산. 상승월은 데이터랩 3년 곡선에서 **자동 추출**"
+    "(고정 라벨 아님)이라 과거 패턴 기준 추정입니다. '🔴 늦음'은 올해 마감이 지난 것 — "
+    "표시 데드라인은 내년 기준입니다.\n\n"
+    f"· 추천 필터 = 규모 ≥ {config.MARKET_SIZE_THRESHOLD:,} AND 계절성 ≥ {sc.FILTER_MIN_INDEX} "
+    "— **발주 상태와 독립**입니다. 전 계절상품의 발주 상태를 보려면 필터를 끄세요(상태는 "
+    "필터와 무관하게 행마다 계산되며, 늦음도 숨기지 않습니다)."
 )
 
 _SEASON_COLUMN_CONFIG = {
@@ -372,6 +409,19 @@ _SEASON_COLUMN_CONFIG = {
         "안정성",
         help="연도별 정점월이 ±1개월 안에 반복되면 '안정'(매년 같은 시즌), 더 흔들리면 '불안정'입니다.",
     ),
+    "발주 데드라인": st.column_config.TextColumn(
+        "발주 데드라인",
+        help="가장 가까운 미래 발주 마감일입니다. 상승월(수요가 오르기 시작하는 달) 1일에서 "
+             f"리드타임 {config.LEAD_TIME_TOTAL_DAYS}일(중국 {config.LEAD_TIME_CHINA_DAYS}+국내 "
+             f"{config.LEAD_TIME_KOREA_DAYS}+버퍼 {config.LEAD_TIME_BUFFER_DAYS})을 역산합니다. "
+             "상승월은 데이터랩 3년 곡선에서 자동 추출됩니다.",
+    ),
+    "발주 상태": st.column_config.TextColumn(
+        "발주 상태",
+        help="오늘(KST) 기준. 🟢 지금 발주 적기(마감 0~30일) · 🟡 임박(30~60일) · "
+             "⚪ 아직 이름(60일 초과) · 🔴 이미 늦음(올해 마감 지남 → 표시 데드라인은 내년 기준). "
+             "추천 필터와 무관하게 행마다 계산되며 늦음도 숨기지 않습니다.",
+    ),
 }
 
 _WINTER_COLUMN_CONFIG = {
@@ -381,8 +431,9 @@ _WINTER_COLUMN_CONFIG = {
 }
 
 
-def _season_row(r: dict) -> dict:
-    """계절 rows → st.dataframe dict. 규모는 sc._fmt_volume 로 '<10'/'확인필요'/콤마 표시."""
+def _season_row(r: dict, deadline: date, status: str) -> dict:
+    """계절 rows → st.dataframe dict. 규모는 sc._fmt_volume 로 '<10'/'확인필요'/콤마 표시.
+    발주 데드라인/상태는 호출부에서 오늘 기준으로 계산해 넘긴다(캐시와 무관, 매 렌더 갱신)."""
     return {
         "제품": r["keyword"],
         "시즌": r["season"],
@@ -390,6 +441,8 @@ def _season_row(r: dict) -> dict:
         "정점/상승월": f"{r['peak_month']}월/{r['rising_month']}월",
         "월 검색량(단일 키워드)": sc._fmt_volume(r["volume"]),
         "안정성": r["stability"],
+        "발주 데드라인": f"{deadline.isoformat()}까지",
+        "발주 상태": status,
     }
 
 
@@ -401,7 +454,10 @@ def render_seasonal() -> None:
     )
 
     # 화면 전용 사이드바 입력(정렬·필터).
-    sort_label = st.sidebar.radio("정렬", ["규모순", "계절성순"], key="season_sort")
+    sort_label = st.sidebar.radio(
+        "정렬", ["규모순", "계절성순", "발주 임박순"], key="season_sort",
+        help="발주 임박순 = 발주 마감일 가까운 순(이미 늦은 상품은 내년 마감이라 뒤로 갑니다).",
+    )
     apply_filter = st.sidebar.toggle(
         f"추천 필터 (규모≥{config.MARKET_SIZE_THRESHOLD:,} AND 계절성≥{sc.FILTER_MIN_INDEX})",
         value=True, key="season_filter", help="끄면 전체 제품을 표시합니다.",
@@ -430,21 +486,28 @@ def render_seasonal() -> None:
         st.info("표시할 계절 제품이 없습니다(계절 시계열이 모두 비어 있음).")
         return
 
-    sort_by = "seasonality" if sort_label == "계절성순" else "scale"
-
     def passes(r: dict) -> bool:  # 추천 필터 = 규모 AND 계절성 (임계는 config/seasonal 그대로).
         return (sc._vol_num(r["volume"]) >= config.MARKET_SIZE_THRESHOLD
                 and r["index"] >= sc.FILTER_MIN_INDEX)
 
+    # 발주 데드라인/상태는 추천 필터와 독립 — 모든 행에 대해 오늘 기준으로 계산(늦음도 숨기지 않음).
+    today = _kst_today()
+    status_of = {id(r): order_deadline_status(r["rising_month"], today) for r in rows}
+
     kept = [r for r in rows if (not apply_filter) or passes(r)]
-    shown = sc._sorted(kept, sort_by)  # 파이프라인 정렬 헬퍼 재사용
+    if sort_label == "발주 임박순":            # 마감일 가까운 순(늦음=내년 마감이라 뒤로).
+        shown = sorted(kept, key=lambda r: status_of[id(r)][0])
+    else:
+        sort_by = "seasonality" if sort_label == "계절성순" else "scale"
+        shown = sc._sorted(kept, sort_by)      # 파이프라인 정렬 헬퍼 재사용
 
     st.caption(
         f"{sort_label} · {'추천필터 ON' if apply_filter else '전체'} · "
-        f"{len(shown)}/{len(rows)}개 (열 머리글 클릭 시 정렬)"
+        f"{len(shown)}/{len(rows)}개 · 오늘(KST) {today.isoformat()} · "
+        f"리드타임 {config.LEAD_TIME_TOTAL_DAYS}일 역산 (열 머리글 클릭 시 정렬)"
     )
     st.dataframe(
-        [_season_row(r) for r in shown],
+        [_season_row(r, *status_of[id(r)]) for r in shown],
         use_container_width=True,
         hide_index=True,
         column_config=_SEASON_COLUMN_CONFIG,
