@@ -325,6 +325,10 @@ def _load_car_demand():
     agg = harvest_models(adapter, seeds, idx)
     rows = rank_models(agg, idx, config.MODEL_MIN_VOLUME)
 
+    # (검산용) (차종, 부품유형)별 묶인 키워드 원본을 그대로 보존 — 가공/필터 없음.
+    # 파이프라인이 이미 agg["keywords"] 로 들고 있는 값 그대로(새 수집 아님). 캐시 안에 함께 보관.
+    members_map = {key: list(a["keywords"]) for key, a in agg.items()}
+
     # 추세는 랭킹 모델 '전체'(중복 정규명 1회). 모델 단위로 데이터랩 그룹 묶음.
     canon_kw = model_member_keywords(agg)
     ranked_canons = {r.canonical for r in rows}
@@ -334,9 +338,9 @@ def _load_car_demand():
     csec = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
     if not (cid and csec):
         return rows, {}, ("데이터랩 키(NAVER_CLIENT_ID/SECRET)가 .env 에 없어 추세를 "
-                          "수집하지 못했습니다 — 추세 컬럼은 '데이터부족'으로 표시됩니다.")
+                          "수집하지 못했습니다 — 추세 컬럼은 '–'로 표시됩니다."), members_map
     trends = car_cli.fetch_trends(canon_kw, cid, csec)  # scripts 의 데이터랩 수집 재사용
-    return rows, trends, None
+    return rows, trends, None, members_map
 
 
 _LIMITS_MD = (
@@ -370,10 +374,10 @@ _DEMAND_COLUMN_CONFIG = {
     ),
     "추세": st.column_config.TextColumn(
         "수요 추세",
-        help="데이터랩 기준 검색량 변화 방향입니다. 최근 3개월 평균 ÷ 직전 12개월 평균. "
-             "1.14=14% 증가(↑), 0.92=8% 감소(↓), 보합=거의 변화 없음. "
-             "★데이터랩은 상대값이라 모델 간 추세 크기 비교는 불가 — 각 모델 내부의 방향만 "
-             "봅니다. 절대 크기는 월 검색량으로 보세요.",
+        help="최근 3개월이 과거 12개월 대비 얼마나 변했는지입니다. ▲ 증가 / ▼ 감소 / ― 보합. "
+             "숫자는 증감%입니다. (저신뢰)가 붙은 행은 모델이 작아(키워드 1~3개) %가 노이즈일 "
+             "수 있으니 방향 참고용으로만 보세요. 데이터랩 상대값이라 모델 간 추세 크기 비교는 "
+             "불가 — 각 모델 내부 방향만 봅니다.",
     ),
     "신뢰도": st.column_config.TextColumn(
         "추세 신뢰도",
@@ -389,24 +393,52 @@ _DEMAND_COLUMN_CONFIG = {
 }
 
 
+# 묶인 키워드(검산) 작은 표 — 키워드 | 검색량(PC+모바일). 색칠·점수 없음.
+_MEMBER_COLUMN_CONFIG = {
+    "키워드": st.column_config.TextColumn("키워드"),
+    "검색량(PC+모바일)": st.column_config.NumberColumn("검색량(PC+모바일)", format="localized"),
+}
+
+
+def _trend_display(t, low_conf: bool) -> str:
+    """추세 표시 전용 포맷(렌더만). 화살표+증감%. 계산/임계값은 Trend(t) 그대로 사용 —
+    방향(↑/↓/보합)은 compute_trend 가 이미 정한 값을 쓰고, %만 비율로 환산해 보여준다.
+
+      신규 후보 → '신규 후보' · 데이터없음/계산불가 → '–'
+      ↑(r≥1.1) → '▲ {pct}%' · ↓(r≤0.9) → '▼ {|pct|}%' · 보합 → '― 보합'
+      저신뢰 행은 위 표기 뒤에 ' (저신뢰)' 꼬리.  ★색칠 없음(텍스트 문자만).
+    """
+    if t is None:
+        return "–"
+    if t.new_candidate:
+        return "신규 후보"
+    if t.ratio is None or t.data_insufficient or t.direction == "데이터부족":
+        return "–"
+    pct = round((t.ratio - 1) * 100)
+    if t.direction == "↑":
+        cell = f"▲ {pct}%"
+    elif t.direction == "↓":
+        cell = f"▼ {abs(pct)}%"
+    else:  # 보합 (0.9 < r < 1.1)
+        cell = "― 보합"
+    return cell + (" (저신뢰)" if low_conf else "")
+
+
 def _demand_table_rows(rows, trends):
-    """ModelRow + Trend → st.dataframe 용 dict 리스트. 추세 셀·신뢰도는 터미널 헬퍼 재사용."""
+    """ModelRow + Trend → st.dataframe 용 dict 리스트. 신뢰도는 터미널 헬퍼(_low_conf) 재사용,
+    추세 표시는 _trend_display(렌더 전용). 정렬·데이터키·임계값 불변."""
     table = []
     for r in rows:
         t = trends.get(r.canonical)
-        if t is None:
-            cell, conf = "데이터부족", "저신뢰"
-        else:
-            lc = car_cli._low_conf(r, t)
-            cell, conf = car_cli._trend_cell(t, lc), ("저신뢰" if lc else "정상")
+        lc = car_cli._low_conf(r, t) if t is not None else True
         table.append(
             {
                 "정규명": r.canonical,
                 "부품유형": r.part_type,
                 "합산검색량": r.volume,
                 "멤버": r.members,
-                "추세": cell,
-                "신뢰도": conf,
+                "추세": _trend_display(t, lc),
+                "신뢰도": "저신뢰" if lc else "정상",
                 "세대미상": "예" if r.ambiguous else "",
             }
         )
@@ -435,7 +467,7 @@ def render_car_demand() -> None:
     st.info(_LIMITS_MD)
 
     try:
-        rows, trends, note = _load_car_demand()
+        rows, trends, note, members_map = _load_car_demand()
     except Exception as e:  # noqa: BLE001 — 원인 명시(키 미설정/API 실패 등, 조용한 폴백 금지)
         st.error(f"차종 수요 수집 실패: {type(e).__name__}: {e}")
         return
@@ -472,6 +504,38 @@ def render_car_demand() -> None:
         hide_index=True,
         column_config=_DEMAND_COLUMN_CONFIG,
     )
+
+    # ── 묶인 키워드 펼쳐보기 (검산용) ────────────────────────────────────────
+    # 합산검색량이 어떤 연관 키워드로 묶였는지 '원본 그대로' 보여준다(미리 거르지 않음).
+    # 목적: 차종 무관 키워드 혼입(오염)을 시경이 눈으로 잡는 것. 새 수집 없음(캐시 안 값).
+    st.divider()
+    st.subheader("🔍 묶인 키워드 보기 (검산용)")
+    st.caption(
+        "본표의 합산검색량이 어떤 연관 키워드들로 묶였는지 원본 그대로입니다 — "
+        "차종과 무관한 키워드가 섞였는지 직접 확인하세요(미리 거르지 않습니다)."
+    )
+    combos = {f"{r.canonical} · {r.part_type}": (r.canonical, r.part_type) for r in shown}
+    if not combos:
+        st.info("현재 뷰에 표시된 행이 없습니다.")
+    else:
+        pick = st.selectbox("차종 · 부품유형 조합 선택", list(combos.keys()))
+        canon, ptype = combos[pick]
+        members = sorted(members_map.get((canon, ptype), []), key=lambda kv: kv[1], reverse=True)
+        st.dataframe(
+            [{"키워드": rel, "검색량(PC+모바일)": vol} for rel, vol in members],
+            use_container_width=True,
+            hide_index=True,
+            column_config=_MEMBER_COLUMN_CONFIG,
+        )
+        member_sum = sum(vol for _, vol in members)
+        table_val = next(
+            (r.volume for r in shown if (r.canonical, r.part_type) == (canon, ptype)), None
+        )
+        match = table_val is not None and member_sum == table_val
+        st.caption(
+            f"멤버 합계 {member_sum:,} {'=' if match else '≠'} 본표 값 "
+            f"{table_val:,} (검산)" + ("" if match else "  ⚠️ 불일치")
+        )
 
 
 # ───────────────────────────────────────────────────────────────────────────
