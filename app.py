@@ -350,6 +350,45 @@ _LIMITS_MD = (
 )
 
 
+# 표시 전용 column_config — 사람이 읽는 헤더명(label) + ⓘ 툴팁(help). 데이터/로직/정렬 불변.
+# dict 키(정규명·합산검색량 …)는 그대로 두고 표시명만 매핑한다. 세 뷰 모두 이 설정을 공유.
+_DEMAND_COLUMN_CONFIG = {
+    "정규명": st.column_config.TextColumn("차종"),
+    "부품유형": st.column_config.TextColumn("부품"),
+    # 천단위 콤마 + 숫자 정렬 유지(문자열로 굳히지 않음). 색칠·점수 없음.
+    "합산검색량": st.column_config.NumberColumn(
+        "월 검색량(PC+모바일)",
+        format="localized",
+        help="이 모델·부품에 묶인 연관 키워드들의 PC+모바일 월간 검색량 합계입니다. "
+             "키워드 하나가 아니라 여러 개를 합산한 값입니다.",
+    ),
+    "멤버": st.column_config.NumberColumn(
+        "묶인 키워드 수",
+        format="localized",
+        help="위 검색량 합산에 들어간 키워드 개수입니다. 1이면 키워드 하나에 전부 의존"
+             "(값이 흔들릴 수 있음), 많을수록 여러 검색어에 걸쳐 더 단단한 수요입니다.",
+    ),
+    "추세": st.column_config.TextColumn(
+        "수요 추세",
+        help="데이터랩 기준 검색량 변화 방향입니다. 최근 3개월 평균 ÷ 직전 12개월 평균. "
+             "1.14=14% 증가(↑), 0.92=8% 감소(↓), 보합=거의 변화 없음. "
+             "★데이터랩은 상대값이라 모델 간 추세 크기 비교는 불가 — 각 모델 내부의 방향만 "
+             "봅니다. 절대 크기는 월 검색량으로 보세요.",
+    ),
+    "신뢰도": st.column_config.TextColumn(
+        "추세 신뢰도",
+        help="정상 = 규모 충분(2000+)·키워드 2개+ 라 추세가 의미 있음. 저신뢰 = 규모가 작거나 "
+             "키워드 1개라 추세가 노이즈일 수 있음 → 방향만 참고하고 숫자는 믿지 마세요.",
+    ),
+    "세대미상": st.column_config.TextColumn(
+        "세대 구분",
+        help="(세대미상)은 사람들이 세대코드 없이 검색한 경우입니다. 수요가 있다는 건 알지만 "
+             "어느 세대(예: 카니발 KA4인지 YP인지)인지는 검색어에 정보가 없어 모릅니다. "
+             "어느 세대 부품을 등록할지는 사람이 판단하는 칸입니다.",
+    ),
+}
+
+
 def _demand_table_rows(rows, trends):
     """ModelRow + Trend → st.dataframe 용 dict 리스트. 추세 셀·신뢰도는 터미널 헬퍼 재사용."""
     table = []
@@ -431,11 +470,7 @@ def render_car_demand() -> None:
         _demand_table_rows(shown, trends),
         use_container_width=True,
         hide_index=True,
-        column_config={
-            # 천단위 콤마 + 숫자 정렬 유지(문자열로 굳히지 않음). 색칠·점수 없음.
-            "합산검색량": st.column_config.NumberColumn("합산검색량", format="localized"),
-            "멤버": st.column_config.NumberColumn("멤버", format="localized"),
-        },
+        column_config=_DEMAND_COLUMN_CONFIG,
     )
 
 
