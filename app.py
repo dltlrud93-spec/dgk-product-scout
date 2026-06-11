@@ -236,6 +236,32 @@ def _kst_today() -> date:
     return datetime.now(_KST).date()
 
 
+def _fmt_recent_3m(val) -> str:
+    """최근3개월 → 신호등 라벨. None = 미조회('—')."""
+    if val is None:
+        return "—"
+    if val >= config.TEAMP_RECENT_HOT:
+        return "🔴 100+ 비추천"
+    if val >= config.TEAMP_RECENT_BUSY:
+        return f"🟡 {val} 보통"
+    if val >= config.TEAMP_RECENT_GOOD:
+        return f"🟢 {val} 노려볼만"
+    return f"🟢 {val} 최고"
+
+
+def _fmt_recent_ratio(recent_3m_docs, doc_count: int) -> str:
+    """최근비중(%) = 최근3개월 ÷ 전체문서 × 100.
+    상한(≥ NAVER_BLOG_SEARCH_RECENT_DISPLAY) 도달 시 분자가 과소 → '—' 반환."""
+    if recent_3m_docs is None:
+        return "—"
+    if recent_3m_docs >= config.NAVER_BLOG_SEARCH_RECENT_DISPLAY:
+        return "—"
+    if doc_count == 0:
+        return "—"
+    pct = recent_3m_docs / doc_count * 100
+    return f"{pct:.1f}%"
+
+
 def order_deadline_status(rising_month: int, today: date) -> tuple[date, str]:
     """수요 상승월(1~12) → (가장 가까운 미래 발주 마감일, 상태 텍스트).
 
@@ -888,25 +914,25 @@ _TEAMP_LIMITS_MD = (
 _TEAMP_COLUMN_CONFIG = {
     "키워드": st.column_config.TextColumn(
         "키워드",
+        width="large",
         help="검색광고 키워드도구 연관 키워드 원문. 이 문자열 그대로 검색량과 문서수를 잽니다.",
-    ),
-    "차종": st.column_config.TextColumn(
-        "차종",
-        help="차종 인식 사전에서 인식된 차종명(표시용). 미인식 키워드는 빈칸.",
     ),
     "검색량": st.column_config.NumberColumn(
         "검색량",
+        width="small",
         format="localized",
         help="이 키워드의 PC+모바일 월간 검색량(검색광고 키워드도구 값).",
     ),
     "문서수": st.column_config.TextColumn(
         "문서수",
+        width="small",
         help="네이버 블로그 검색 '{키워드 원문}' 결과의 total 값입니다. "
              "근사치이며 실제 노출 경쟁(블로그 지수)을 반영하지 않습니다. "
              "'–'는 429 재시도 소진으로 조회 실패한 항목입니다.",
     ),
     "비율": st.column_config.TextColumn(
         "비율",
+        width="small",
         help=(
             "문서수 ÷ 검색량 (동일 키워드 기준). "
             "1 미만 = 블로그 글이 수요보다 적어 노릴 자리(황금), "
@@ -917,17 +943,34 @@ _TEAMP_COLUMN_CONFIG = {
     ),
     "최근3개월": st.column_config.TextColumn(
         "최근3개월",
+        width="medium",
         help=(
-            "최근 3개월 내 작성된 블로그 글 수(추정). "
-            "총 문서수는 많아도 이 값이 작으면 최근 경쟁이 약해 새 글 상위 진입에 유리할 수 있음. "
-            "단 검색량이 받쳐줘야 의미. "
-            "최신순 상위 100건 기준 추정치이므로 직접 검색 확인 권장. "
-            f"'—'는 조회 미대상(포화 + 검색량 {config.TEAMP_SATURATED_MIN_VOLUME:,} 미만)."
+            "최근 3개월 내 작성 블로그 글 수(추정, 최신순 상위 100개 기준). "
+            "낮을수록 최근 경쟁 약함. "
+            "🔴100+ 매우 치열 / 🟡30~99 꽤 있음 / 🟢6~29 약함 / 🟢0~5 거의 방치. "
+            "직접 검색으로 확인 권장."
+        ),
+    ),
+    "최근비중": st.column_config.TextColumn(
+        "최근비중",
+        width="small",
+        help=(
+            "전체 블로그 글 중 최근 3개월 글의 비중(%). "
+            "낮을수록 과거엔 많았으나 지금은 식어 새 글이 들어갈 틈. "
+            "높을수록 지금 달아오르는 중. "
+            "검색량 크고 + 비중 낮으면 노려볼 만. "
+            "최근 글이 100+(상한)인 키워드는 계산 불가('—')."
         ),
     ),
     "분류": st.column_config.TextColumn(
         "분류",
+        width="medium",
         help="🟡 황금: 비율 < 1.0 / 🟢 해볼만: 1.0 ≤ 비율 ≤ 3.0 / 🔴 포화/후순위: 비율 > 3.0",
+    ),
+    "차종": st.column_config.TextColumn(
+        "차종",
+        width="small",
+        help="차종 인식 사전에서 인식된 차종명(표시용). 미인식 키워드는 빈칸.",
     ),
 }
 
@@ -1151,20 +1194,28 @@ def render_teamp() -> None:
         + f" · 제품 키워드: {', '.join(products)} (열 머리글 클릭 시 정렬)"
     )
 
+    # 컬럼 순서: 키워드·검색량·문서수·비율·최근3개월·최근비중·분류 (핵심 7개) | 차종(참고, 우측)
     table_rows = [
         {
-            "키워드": r.keyword, "차종": r.car_model, "검색량": r.volume,
-            "문서수": f"{r.doc_count:,}", "비율": f"{r.ratio:.2f}",
-            "최근3개월": "—" if r.recent_3m_docs is None else str(r.recent_3m_docs),
+            "키워드": r.keyword,
+            "검색량": r.volume,
+            "문서수": f"{r.doc_count:,}",
+            "비율": f"{r.ratio:.2f}",
+            "최근3개월": _fmt_recent_3m(r.recent_3m_docs),
+            "최근비중": _fmt_recent_ratio(r.recent_3m_docs, r.doc_count),
             "분류": r.grade,
+            "차종": r.car_model,
         }
         for r in shown
     ]
-    # 조회 실패 항목: 맨 아래, 문서수·비율·최근3개월 '–'
+    # 조회 실패 항목: 맨 아래, 문서수·비율·최근3개월·최근비중 '–'
     for kw, cm, v in failed_items:
         table_rows.append({
-            "키워드": kw, "차종": cm, "검색량": v,
-            "문서수": "–", "비율": "–", "최근3개월": "–", "분류": "⚠️ 조회실패",
+            "키워드": kw,
+            "검색량": v,
+            "문서수": "–", "비율": "–", "최근3개월": "–", "최근비중": "–",
+            "분류": "⚠️ 조회실패",
+            "차종": cm,
         })
 
     st.dataframe(
@@ -1172,6 +1223,7 @@ def render_teamp() -> None:
         use_container_width=True,
         hide_index=True,
         column_config=_TEAMP_COLUMN_CONFIG,
+        column_order=["키워드", "검색량", "문서수", "비율", "최근3개월", "최근비중", "분류", "차종"],
     )
 
     if failed_items:
