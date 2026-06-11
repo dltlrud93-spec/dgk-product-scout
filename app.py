@@ -182,6 +182,44 @@ def _highlight_card(title: str, pills: list) -> None:
     )
 
 
+def _highlight_table(title: str, headers: list, rows_data: list, align: list = None) -> None:
+    """amber 강조 카드 안에 소형 HTML 표.
+
+    rows_data = list of cell-string lists per row.
+    align = per-column "left"/"center"/"right" (기본 전부 left).
+    """
+    if not rows_data:
+        return
+    if align is None:
+        align = ["left"] * len(headers)
+
+    th_html = "".join(
+        f'<th style="text-align:{a};padding:5px 10px;font-size:11.5px;font-weight:500;'
+        f'color:#92400e;border-bottom:1.5px solid #fbbf24;white-space:nowrap;">{h}</th>'
+        for h, a in zip(headers, align)
+    )
+    rows_html = ""
+    for i, cells in enumerate(rows_data):
+        bg = "#fffbeb" if i % 2 == 0 else "#fef9c3"
+        tds = "".join(
+            f'<td style="text-align:{a};padding:5px 10px;font-size:12.5px;'
+            f'color:#1f2937;white-space:nowrap;">{c}</td>'
+            for a, c in zip(align, cells)
+        )
+        rows_html += f'<tr style="background:{bg};">{tds}</tr>'
+
+    table_html = (
+        f'<table style="border-collapse:collapse;width:100%;margin-top:6px;">'
+        f'<thead><tr style="background:#fef3c7;">{th_html}</tr></thead>'
+        f'<tbody>{rows_html}</tbody>'
+        f'</table>'
+    )
+    st.markdown(
+        f'<div class="dgk-hl"><div class="dgk-hl-title">{title}</div>{table_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def _fmt_vol_display(vol: int, low: bool) -> str:
     """표시 전용 검색량 포맷. low(원래 '< 10')면 '<10', 아니면 천단위 콤마.
     ★숫자를 만들어내지 않는다 — '<10' 은 네이버가 정확값을 안 주는 항목의 표시일 뿐."""
@@ -404,17 +442,23 @@ def render_car_demand() -> None:
     )
     _chips([("총 모델", str(len(rows))), ("추세 ↑", str(n_up)), ("신규 후보", str(n_new))])
 
-    # 핵심 강조 카드: 추세 상승 + 신규 후보
-    hl_rows = [
-        r for r in rows
-        if trends.get(r.canonical) is not None
-        and (trends[r.canonical].new_candidate or trends[r.canonical].direction == "↑")
-    ]
-    hl_pills = [
-        (r.canonical, "신규 후보" if trends[r.canonical].new_candidate else "↑")
-        for r in hl_rows[:8]
-    ]
-    _highlight_card("📈 추세 상승 · 신규 후보 차종", hl_pills)
+    # 핵심 강조 카드: 추세 상승 + 신규 후보 (검색량 내림차순)
+    hl_rows = sorted(
+        [r for r in rows
+         if trends.get(r.canonical) is not None
+         and (trends[r.canonical].new_candidate or trends[r.canonical].direction == "↑")],
+        key=lambda r: r.volume, reverse=True,
+    )
+    _highlight_table(
+        "📈 추세 상승 · 신규 후보 차종",
+        ["차종", "검색량", "추세"],
+        [
+            [r.canonical, f"{r.volume:,}",
+             "신규 후보" if trends[r.canonical].new_candidate else "↑"]
+            for r in hl_rows[:8]
+        ],
+        align=["left", "right", "center"],
+    )
 
     # 뷰 선택 — 터미널의 세 뷰와 동일.
     view = st.radio(
@@ -658,10 +702,18 @@ def render_seasonal() -> None:
         ("계절성 있음", str(n_seasonal)),
     ])
 
-    # 핵심 강조 카드: 발주 적기 제품
-    prime_rows = [r for r in rows if status_of[id(r)][1] == "🟢 지금 발주 적기"]
-    prime_pills = [(r["keyword"], status_of[id(r)][0].isoformat() + "까지") for r in prime_rows[:8]]
-    _highlight_card("🟢 지금 발주 적기 제품", prime_pills)
+    # 핵심 강조 카드: 발주 적기 제품 (마감 임박순)
+    prime_rows = sorted(
+        [r for r in rows if status_of[id(r)][1] == "🟢 지금 발주 적기"],
+        key=lambda r: status_of[id(r)][0],
+    )
+    _highlight_table(
+        "🟢 지금 발주 적기 제품",
+        ["제품", "마감일"],
+        [[r["keyword"], status_of[id(r)][0].isoformat() + "까지"]
+         for r in prime_rows[:8]],
+        align=["left", "center"],
+    )
 
     kept = [r for r in rows if (not apply_filter) or passes(r)]
     if sort_label == "발주 임박순":            # 마감일 가까운 순(늦음=내년 마감이라 뒤로).
@@ -895,9 +947,9 @@ def render_teamp() -> None:
     )
     top10_sort_label = st.sidebar.radio(
         "황금 TOP10",
-        ["검색량 높은 순", "비율 낮은 순"],
+        ["비율 낮은 순", "검색량 높은 순"],
         key="teamp_top10_sort",
-        help="황금(🟡) 중 어떤 순서로 TOP10을 뽑을지 선택합니다.",
+        help="기본: 비율 낮은 순(공략 여지 큰 순). 검색량 높은 순으로 바꾸면 규모 큰 황금 후보를 먼저 볼 수 있습니다.",
     )
 
     products = [s.strip() for s in product_text.replace(",", "\n").splitlines() if s.strip()]
@@ -989,8 +1041,15 @@ def render_teamp() -> None:
     _chips(chip_items)
 
     if top10:
-        top_pills = [(r.keyword, f"비율 {r.ratio:.2f}") for r in top10]
-        _highlight_card(f"🟡 황금 TOP {len(top10)} — {top10_sort_label}", top_pills)
+        # 비율 낮은 순 → 동률은 검색량 높은 순 (표시 정렬만, 10개 선택은 top_gold_kw_rows* 결과 그대로)
+        display_top10 = sorted(top10, key=lambda r: (r.ratio, -r.volume))
+        _highlight_table(
+            f"🟡 황금 TOP {len(display_top10)} — {top10_sort_label}",
+            ["순위", "키워드", "검색량", "비율"],
+            [[str(i + 1), r.keyword, f"{r.volume:,}", f"{r.ratio:.2f}"]
+             for i, r in enumerate(display_top10)],
+            align=["center", "left", "right", "right"],
+        )
     else:
         st.info("황금 분류 후보가 없습니다(전체가 해볼만 이상).")
 
