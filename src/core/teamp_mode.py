@@ -19,6 +19,8 @@ teamp_mode.py — 체험단 타겟 선정 모드 코어.
 
 from __future__ import annotations
 
+import calendar
+import datetime
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -80,6 +82,88 @@ def classify_ratio(
     if ratio <= ok:
         return "🟢 해볼만"
     return "🔴 포화/후순위"
+
+
+def _cutoff_date(months: int) -> datetime.date:
+    """오늘 기준 months 개월 전 날짜. 말일 clamp 처리(예: 3/31 → 3개월 전 = 12/31)."""
+    today = datetime.date.today()
+    month = today.month - months
+    year = today.year
+    while month <= 0:
+        month += 12
+        year -= 1
+    last_day = calendar.monthrange(year, month)[1]
+    day = min(today.day, last_day)
+    return datetime.date(year, month, day)
+
+
+def _parse_postdate(postdate: str) -> Optional[datetime.date]:
+    """'20240115' → datetime.date. 파싱 불가 시 None."""
+    try:
+        return datetime.date(int(postdate[:4]), int(postdate[4:6]), int(postdate[6:8]))
+    except (ValueError, IndexError, TypeError):
+        return None
+
+
+def fetch_recent_blog_count(
+    query: str,
+    client_id: str,
+    client_secret: str,
+    *,
+    months: int = config.TEAMP_RECENT_MONTHS,
+    http_get: Optional[Callable] = None,
+    sleep_fn: Optional[Callable[[float], None]] = None,
+    max_retries: int = config.NAVER_BLOG_MAX_RETRIES,
+    backoff_seconds: float = config.NAVER_BLOG_BACKOFF_SECONDS,
+    call_delay: float = config.NAVER_BLOG_CALL_DELAY,
+) -> int:
+    """네이버 블로그 검색(sort=date, display=100) → 최근 months 개월 이내 글 수 추정.
+
+    최신순 상위 NAVER_BLOG_SEARCH_RECENT_DISPLAY 건의 postdate 를 파싱해 카운트.
+    ★ 추정치: 상위 100건 기준이라 전수가 아님. 총 문서수 ≤ 100 이면 정확도 높음.
+    429/백오프/재시도는 fetch_blog_count 와 동일 패턴.
+    """
+    _get = http_get if http_get is not None else requests.get
+    _sleep = sleep_fn if sleep_fn is not None else time.sleep
+
+    _sleep(call_delay)
+
+    cutoff = _cutoff_date(months)
+
+    for attempt in range(max_retries + 1):
+        resp = _get(
+            config.NAVER_BLOG_SEARCH_URL,
+            params={
+                "query": query,
+                "display": config.NAVER_BLOG_SEARCH_RECENT_DISPLAY,
+                "sort": "date",
+            },
+            headers={
+                "X-Naver-Client-Id": client_id,
+                "X-Naver-Client-Secret": client_secret,
+            },
+            timeout=10,
+        )
+        if resp.status_code == 429:
+            if attempt < max_retries:
+                retry_after = resp.headers.get("Retry-After")
+                try:
+                    wait = float(retry_after) if retry_after else backoff_seconds * (2 ** attempt)
+                except ValueError:
+                    wait = backoff_seconds * (2 ** attempt)
+                _sleep(wait)
+                continue
+            raise BlogFetchError(
+                f"429 Too Many Requests — {max_retries}회 재시도 소진: {query!r}"
+            )
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+        return sum(
+            1 for item in items
+            if (_parse_postdate(item.get("postdate", "")) or datetime.date.min) >= cutoff
+        )
+
+    raise BlogFetchError(f"재시도 소진: {query!r}")  # 실질적 도달 불가
 
 
 def fetch_blog_count(
@@ -266,6 +350,7 @@ class TeampKwRow:
     doc_count: int     # 블로그 문서수 (keyword 원문 그대로 블로그 검색 → total)
     ratio: float       # doc_count / volume
     grade: str         # "🟡 황금" / "🟢 해볼만" / "🔴 포화/후순위"
+    recent_3m_docs: Optional[int] = None  # 최근 N개월 이내 블로그 글 수 추정치. None = 조회 안 함("—")
 
 
 def harvest_teamp_kw_items(
@@ -365,3 +450,50 @@ def top_gold_kw_rows_by_ratio(rows: list[TeampKwRow], n: int = 10) -> list[Teamp
     gold = [r for r in rows if r.grade == "🟡 황금"]
     gold.sort(key=lambda r: r.ratio)
     return gold[:n]
+
+
+def fetch_recent_3m_docs_partial(
+    rows: list[TeampKwRow],
+    recent_blog_fn: Callable[[str], int],
+    max_workers: int = config.NAVER_BLOG_MAX_WORKERS,
+    on_progress: Optional[Callable[[int, int], None]] = None,
+) -> list[TeampKwRow]:
+    """rows 의 recent_3m_docs 를 채워 반환 (in-place 갱신 후 rows 반환).
+
+    조회 대상:
+    · 황금(🟡) + 해볼만(🟢) → 전체
+    · 포화(🔴) 중 검색량 ≥ config.TEAMP_SATURATED_MIN_VOLUME → 숨은 기회 탐색
+    조회 안 함 → recent_3m_docs 는 None 유지 (표시 "—").
+    실패 항목: recent_3m_docs = None (부분 실패 허용, 전체 중단 없음).
+    """
+    target = [
+        r for r in rows
+        if r.grade != "🔴 포화/후순위" or r.volume >= config.TEAMP_SATURATED_MIN_VOLUME
+    ]
+    if not target:
+        return rows
+
+    total = len(target)
+    done = 0
+    result_map: dict[str, Optional[int]] = {}
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, total)) as executor:
+        future_map = {
+            executor.submit(recent_blog_fn, r.keyword): r.keyword
+            for r in target
+        }
+        for future in as_completed(future_map):
+            keyword = future_map[future]
+            try:
+                result_map[keyword] = future.result()
+            except Exception:
+                result_map[keyword] = None
+            done += 1
+            if on_progress:
+                on_progress(done, total)
+
+    for r in rows:
+        if r.keyword in result_map:
+            r.recent_3m_docs = result_map[r.keyword]
+
+    return rows

@@ -20,15 +20,21 @@ from types import SimpleNamespace
 
 import pytest
 
+import datetime
+
 import config
 from src.core.teamp_mode import (
     BlogFetchError,
     TeampKwRow,
     TeampRow,
+    _cutoff_date,
+    _parse_postdate,
     _query_name,
     build_teamp_rows,
     classify_ratio,
     fetch_blog_count,
+    fetch_recent_blog_count,
+    fetch_recent_3m_docs_partial,
     fetch_teamp_kw_rows_partial,
     fetch_teamp_rows_partial,
     harvest_teamp_kw_items,
@@ -623,3 +629,182 @@ def test_compat_fetch_teamp_rows_partial_some_fail():
     assert len(rows) == 2
     assert len(failed) == 1
     assert failed[0][0] == "실패차종"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 최신성 지표 — recent_3m_docs
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────── TeampKwRow 필드 ───────────────────────────────────────────
+def test_recent_3m_docs_field_exists():
+    """TeampKwRow 에 recent_3m_docs 필드가 있다."""
+    import dataclasses
+    fields = {f.name for f in dataclasses.fields(TeampKwRow)}
+    assert "recent_3m_docs" in fields
+
+
+def test_recent_3m_docs_default_is_none():
+    """fetch_teamp_kw_rows_partial 결과 행의 recent_3m_docs 기본값은 None."""
+    items = [("셀토스에어컨필터", "셀토스KX3", 5000)]
+    rows, _ = fetch_teamp_kw_rows_partial(items, lambda q: 2330, max_workers=1)
+    assert rows[0].recent_3m_docs is None
+
+
+# ─────────────────── 헬퍼: _cutoff_date / _parse_postdate ──────────────────────
+def test_cutoff_date_returns_date_n_months_ago():
+    today = datetime.date.today()
+    cutoff = _cutoff_date(3)
+    assert cutoff < today
+    # 대략 3개월 전 (±5일 허용)
+    delta = (today - cutoff).days
+    assert 80 <= delta <= 100
+
+
+def test_parse_postdate_valid():
+    assert _parse_postdate("20240115") == datetime.date(2024, 1, 15)
+    assert _parse_postdate("20231231") == datetime.date(2023, 12, 31)
+
+
+def test_parse_postdate_invalid():
+    assert _parse_postdate("") is None
+    assert _parse_postdate("bad") is None
+    assert _parse_postdate("00000000") is None
+
+
+# ─────────────────── fetch_recent_blog_count ──────────────────────────────────
+def _today_minus(days: int) -> str:
+    """테스트용: 오늘 기준 days 일 전 날짜를 postdate 형식(YYYYMMDD)으로 반환."""
+    d = datetime.date.today() - datetime.timedelta(days=days)
+    return d.strftime("%Y%m%d")
+
+
+def test_fetch_recent_blog_count_counts_recent_posts():
+    """3개월 이내(30일 전) 글 1건 + 3개월 초과(200일 전) 글 1건 → 1 반환."""
+    items = [
+        {"postdate": _today_minus(30)},   # 최근
+        {"postdate": _today_minus(200)},  # 오래됨
+    ]
+    ok_resp = type("R", (), {
+        "status_code": 200,
+        "headers": {},
+        "raise_for_status": lambda self: None,
+        "json": lambda self: {"items": items},
+    })()
+
+    result = fetch_recent_blog_count(
+        "테스트키워드", "cid", "csec",
+        http_get=lambda *a, **kw: ok_resp,
+        sleep_fn=lambda _: None,
+        call_delay=0.0,
+    )
+    assert result == 1
+
+
+def test_fetch_recent_blog_count_all_recent():
+    """모든 글이 3개월 이내 → items 수와 같은 값 반환."""
+    items = [{"postdate": _today_minus(10)}, {"postdate": _today_minus(20)}]
+    ok_resp = type("R", (), {
+        "status_code": 200,
+        "headers": {},
+        "raise_for_status": lambda self: None,
+        "json": lambda self: {"items": items},
+    })()
+
+    result = fetch_recent_blog_count(
+        "테스트", "cid", "csec",
+        http_get=lambda *a, **kw: ok_resp,
+        sleep_fn=lambda _: None,
+        call_delay=0.0,
+    )
+    assert result == 2
+
+
+def test_fetch_recent_blog_count_429_retry():
+    """429 후 성공 시 재시도해 결과 반환."""
+    items = [{"postdate": _today_minus(15)}]
+    responses = iter([
+        type("R", (), {
+            "status_code": 429,
+            "headers": {},
+            "raise_for_status": lambda self: None,
+            "json": lambda self: {},
+        })(),
+        type("R", (), {
+            "status_code": 200,
+            "headers": {},
+            "raise_for_status": lambda self: None,
+            "json": lambda self: {"items": items},
+        })(),
+    ])
+    sleeps: list[float] = []
+
+    result = fetch_recent_blog_count(
+        "테스트", "cid", "csec",
+        http_get=lambda *a, **kw: next(responses),
+        sleep_fn=sleeps.append,
+        max_retries=3,
+        backoff_seconds=1.0,
+        call_delay=0.0,
+    )
+    assert result == 1
+    assert 1.0 in sleeps  # 첫 번째 백오프
+
+
+# ─────────────────── fetch_recent_3m_docs_partial ─────────────────────────────
+def _make_rows(specs: list[tuple[str, int, str]]) -> list[TeampKwRow]:
+    """[(keyword, volume, grade), ...] → TeampKwRow 리스트."""
+    return [
+        TeampKwRow(keyword=kw, car_model="", volume=vol, doc_count=100, ratio=1.0, grade=grade)
+        for kw, vol, grade in specs
+    ]
+
+
+def test_recent_3m_docs_fills_gold_and_ok():
+    """황금·해볼만 행은 recent_3m_docs 가 채워진다."""
+    rows = _make_rows([
+        ("황금키워드",   5000, "🟡 황금"),
+        ("해볼만키워드", 3000, "🟢 해볼만"),
+    ])
+    fetch_recent_3m_docs_partial(rows, lambda q: 7, max_workers=1)
+    assert rows[0].recent_3m_docs == 7
+    assert rows[1].recent_3m_docs == 7
+
+
+def test_recent_3m_docs_fills_saturated_high_volume():
+    """포화 + 검색량 ≥ TEAMP_SATURATED_MIN_VOLUME → 조회 대상."""
+    vol = config.TEAMP_SATURATED_MIN_VOLUME
+    rows = _make_rows([("포화큰검색", vol, "🔴 포화/후순위")])
+    fetch_recent_3m_docs_partial(rows, lambda q: 5, max_workers=1)
+    assert rows[0].recent_3m_docs == 5
+
+
+def test_recent_3m_docs_skips_saturated_low_volume():
+    """포화 + 검색량 < TEAMP_SATURATED_MIN_VOLUME → 조회 안 함(None 유지)."""
+    vol = config.TEAMP_SATURATED_MIN_VOLUME - 1
+    rows = _make_rows([("포화작은검색", vol, "🔴 포화/후순위")])
+    fetch_recent_3m_docs_partial(rows, lambda q: 5, max_workers=1)
+    assert rows[0].recent_3m_docs is None
+
+
+def test_recent_3m_docs_partial_failure_yields_none():
+    """recent_blog_fn 예외 → 해당 행만 None, 나머지 정상."""
+    rows = _make_rows([
+        ("성공키워드", 5000, "🟡 황금"),
+        ("실패키워드", 3000, "🟡 황금"),
+    ])
+
+    def selective(q: str) -> int:
+        if "실패" in q:
+            raise BlogFetchError("mock")
+        return 3
+
+    fetch_recent_3m_docs_partial(rows, selective, max_workers=2)
+    kw_map = {r.keyword: r for r in rows}
+    assert kw_map["성공키워드"].recent_3m_docs == 3
+    assert kw_map["실패키워드"].recent_3m_docs is None
+
+
+def test_recent_3m_docs_empty_rows():
+    """빈 리스트 입력 → 그대로 반환, 예외 없음."""
+    result = fetch_recent_3m_docs_partial([], lambda q: 0, max_workers=1)
+    assert result == []

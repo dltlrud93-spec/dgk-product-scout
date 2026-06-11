@@ -278,3 +278,12 @@ NAVER_BLOG_CALL_DELAY = 0.1         # 각 호출 전 지연(초). rate limit 완
 # 429 재시도 파라미터 (naver_adapter 패턴 동일: Retry-After 우선, 없으면 지수백오프).
 NAVER_BLOG_MAX_RETRIES = 3          # 429 최대 재시도 횟수
 NAVER_BLOG_BACKOFF_SECONDS = 1.0    # 첫 재시도 대기(초), 이후 2배씩 (1→2→4초)
+
+# 최신성 지표 — "최근 N개월 이내 블로그 글 수" (recent_3m_docs).
+# sort=date 결과 상위 NAVER_BLOG_SEARCH_RECENT_DISPLAY 건의 postdate 를 파싱해 카운트.
+# 전수가 아닌 추정치(상위 N건 기준) — 총 문서수 ≤ 100 이면 정확도 높음.
+TEAMP_RECENT_MONTHS = 3             # 최신성 기준 개월 수. 이 기간 이내 글 = "최근 경쟁".
+# 포화(비율 > 3.0) 키워드 중 이 값 이상 검색량이면 최신성 조회 포함(숨은 기회 탐색).
+# [확인 필요] 에어컨필터·자동차에어컨필터 첫 추출 분포 보고 시경이 확정.
+TEAMP_SATURATED_MIN_VOLUME = 1000
+NAVER_BLOG_SEARCH_RECENT_DISPLAY = 100  # 최신성 조회 시 가져올 결과 수(API max=100, sort=date).

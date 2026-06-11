@@ -46,6 +46,8 @@ from src.core.car_demand import harvest_models, model_member_keywords, rank_mode
 from src.core.car_models import load_car_models
 from src.core.teamp_mode import (
     fetch_blog_count,
+    fetch_recent_blog_count,
+    fetch_recent_3m_docs_partial,
     fetch_teamp_kw_rows_partial,
     harvest_teamp_kw_items,
     top_gold_kw_rows,
@@ -913,6 +915,16 @@ _TEAMP_COLUMN_CONFIG = {
             "후보 키워드는 직접 검색해 경쟁 글 품질을 확인하세요."
         ),
     ),
+    "최근3개월": st.column_config.TextColumn(
+        "최근3개월",
+        help=(
+            "최근 3개월 내 작성된 블로그 글 수(추정). "
+            "총 문서수는 많아도 이 값이 작으면 최근 경쟁이 약해 새 글 상위 진입에 유리할 수 있음. "
+            "단 검색량이 받쳐줘야 의미. "
+            "최신순 상위 100건 기준 추정치이므로 직접 검색 확인 권장. "
+            f"'—'는 조회 미대상(포화 + 검색량 {config.TEAMP_SATURATED_MIN_VOLUME:,} 미만)."
+        ),
+    ),
     "분류": st.column_config.TextColumn(
         "분류",
         help="🟡 황금: 비율 < 1.0 / 🟢 해볼만: 1.0 ≤ 비율 ≤ 3.0 / 🔴 포화/후순위: 비율 > 3.0",
@@ -942,6 +954,15 @@ def _harvest_teamp_kw(products: tuple[str, ...]) -> list[tuple[str, str, int]]:
 
 def render_teamp() -> None:
     _inject_css()
+
+    # ── TEMP DEBUG (진단 후 삭제) ────────────────────────────────────────────────
+    st.write("🔧 DEBUG:", {
+        "session_keys": [k for k in st.session_state.keys() if "teamp" in k.lower()],
+        "results_저장됨": "_teamp_results" in st.session_state,
+        "마지막_키워드": st.session_state.get("_teamp_last_keywords", "(없음)"),
+    })
+    # ── END TEMP DEBUG ────────────────────────────────────────────────────────────
+
     st.title("체험단 타겟 선정")
     st.caption(
         "제품 키워드 → 연관 키워드 수확 → 키워드별 검색량 × 블로그 문서수 → 비율 분류. "
@@ -959,9 +980,14 @@ def render_teamp() -> None:
     st.sidebar.markdown("**정렬**")
     sort_label = st.sidebar.radio(
         "본표",
-        ["비율 오름차순 (황금 위)", "검색량 내림차순"],
+        ["비율 오름차순 (황금 위)", "검색량 내림차순", "검색량↑ + 최근글↓ (숨은 기회)"],
         key="teamp_sort",
-        help="기본: 비율 오름차순(황금 후보가 위). 검색량순으로 바꾸면 규모 큰 키워드를 먼저 볼 수 있습니다.",
+        help=(
+            "기본: 비율 오름차순(황금 후보가 위). "
+            "검색량순: 규모 큰 키워드 먼저. "
+            "검색량↑ + 최근글↓: 검색량이 크면서 최근 3개월 글이 적은 키워드 — "
+            "총 문서수는 많아도 최신 경쟁이 약한 숨은 기회 탐색."
+        ),
     )
     top10_sort_label = st.sidebar.radio(
         "황금 TOP10",
@@ -971,6 +997,10 @@ def render_teamp() -> None:
     )
 
     products = [s.strip() for s in product_text.replace(",", "\n").splitlines() if s.strip()]
+
+    # 진단용: 비위젯 키로 마지막 키워드 별도 저장 (탭 전환 후에도 보존 여부 확인용)
+    if products:
+        st.session_state["_teamp_last_keywords"] = products
 
     col_btn, col_note = st.columns([1, 4])
     with col_btn:
@@ -1034,6 +1064,25 @@ def render_teamp() -> None:
         )
         prog.empty()
 
+        # 최신성 조회: 황금+해볼만 전체 + 포화 중 검색량 큰 것
+        recent_targets = [
+            r for r in rows
+            if r.grade != "🔴 포화/후순위" or r.volume >= config.TEAMP_SATURATED_MIN_VOLUME
+        ]
+        if recent_targets:
+            prog_r = st.progress(0, f"최근 {config.TEAMP_RECENT_MONTHS}개월 글 수 조회 중... 0/{len(recent_targets)}")
+
+            def _prog_r_cb(done: int, tot: int) -> None:
+                prog_r.progress(done / tot, f"최근 {config.TEAMP_RECENT_MONTHS}개월 글 수 조회 중... {done}/{tot}")
+
+            rows = fetch_recent_3m_docs_partial(
+                rows,
+                lambda q: fetch_recent_blog_count(q, cid, csec),
+                max_workers=config.NAVER_BLOG_MAX_WORKERS,
+                on_progress=_prog_r_cb,
+            )
+            prog_r.empty()
+
         st.session_state[_TEAMP_RESULTS_KEY] = {
             "products": products,
             "rows": rows,
@@ -1054,11 +1103,14 @@ def render_teamp() -> None:
     for r in rows:
         grade_counts[r.grade] = grade_counts.get(r.grade, 0) + 1
 
+    recent_queried = sum(1 for r in rows if r.recent_3m_docs is not None)
     chip_items = [
         ("🟡 황금", str(grade_counts["🟡 황금"])),
         ("🟢 해볼만", str(grade_counts["🟢 해볼만"])),
         ("🔴 포화/후순위", str(grade_counts["🔴 포화/후순위"])),
     ]
+    if recent_queried:
+        chip_items.append(("📅 최신성 조회", str(recent_queried)))
     if failed_items:
         chip_items.append(("⚠️ 조회실패", str(len(failed_items))))
     _chips(chip_items)
@@ -1081,6 +1133,14 @@ def render_teamp() -> None:
     st.subheader("본표")
     if sort_label == "검색량 내림차순":
         shown = sorted(rows, key=lambda r: r.volume, reverse=True)
+    elif sort_label == "검색량↑ + 최근글↓ (숨은 기회)":
+        shown = sorted(
+            rows,
+            key=lambda r: (
+                -r.volume,
+                r.recent_3m_docs if r.recent_3m_docs is not None else float("inf"),
+            ),
+        )
     else:
         shown = sorted(rows, key=lambda r: r.ratio)
 
@@ -1091,15 +1151,19 @@ def render_teamp() -> None:
     )
 
     table_rows = [
-        {"키워드": r.keyword, "차종": r.car_model, "검색량": r.volume,
-         "문서수": f"{r.doc_count:,}", "비율": f"{r.ratio:.2f}", "분류": r.grade}
+        {
+            "키워드": r.keyword, "차종": r.car_model, "검색량": r.volume,
+            "문서수": f"{r.doc_count:,}", "비율": f"{r.ratio:.2f}",
+            "최근3개월": "—" if r.recent_3m_docs is None else str(r.recent_3m_docs),
+            "분류": r.grade,
+        }
         for r in shown
     ]
-    # 조회 실패 항목: 맨 아래, 문서수·비율 '–'
+    # 조회 실패 항목: 맨 아래, 문서수·비율·최근3개월 '–'
     for kw, cm, v in failed_items:
         table_rows.append({
             "키워드": kw, "차종": cm, "검색량": v,
-            "문서수": "–", "비율": "–", "분류": "⚠️ 조회실패",
+            "문서수": "–", "비율": "–", "최근3개월": "–", "분류": "⚠️ 조회실패",
         })
 
     st.dataframe(
