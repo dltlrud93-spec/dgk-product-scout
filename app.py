@@ -351,6 +351,12 @@ _MEMBER_COLUMN_CONFIG = {
 }
 
 
+# ── 화면별 session_state 결과 캐시 키 ────────────────────────────────────────
+_DEMAND_RESULTS_KEY = "_demand_results"
+_SEASONAL_RESULTS_KEY = "_seasonal_results"
+_TEAMP_RESULTS_KEY = "_teamp_results"
+
+
 def _trend_display(t, low_conf: bool) -> str:
     """추세 표시 전용 포맷(렌더만). 화살표+증감%. 계산/임계값은 Trend(t) 그대로 사용 —
     방향(↑/↓/보합)은 compute_trend 가 이미 정한 값을 쓰고, %만 비율로 환산해 보여준다.
@@ -408,22 +414,28 @@ def render_car_demand() -> None:
     with col_btn:
         if st.button("🔄 새로고침", key="car_refresh",
                      help="캐시를 비우고 검색광고+데이터랩을 다시 호출합니다."):
-            st.cache_data.clear()
+            _load_car_demand.clear()
+            st.session_state.pop(_DEMAND_RESULTS_KEY, None)
             st.rerun()
     with col_note:
         st.caption(
-            f"1시간 캐시 · 컷 MODEL_MIN_VOLUME={config.MODEL_MIN_VOLUME:,} · "
+            f"결과 세션 유지 · 컷 MODEL_MIN_VOLUME={config.MODEL_MIN_VOLUME:,} · "
             f"추세 {config.TREND_RECENT_MONTHS}개월÷{config.TREND_BASELINE_MONTHS}개월."
         )
 
     with st.expander("표 해석 주의 · 한계", expanded=False):
         st.markdown(_LIMITS_MD)
 
-    try:
-        rows, trends, note, members_map = _load_car_demand()
-    except Exception as e:  # noqa: BLE001 — 원인 명시(키 미설정/API 실패 등, 조용한 폴백 금지)
-        st.error(f"차종 수요 수집 실패: {type(e).__name__}: {e}")
-        return
+    _cached = st.session_state.get(_DEMAND_RESULTS_KEY)
+    if _cached is not None:
+        rows, trends, note, members_map = _cached
+    else:
+        try:
+            rows, trends, note, members_map = _load_car_demand()
+        except Exception as e:  # noqa: BLE001 — 원인 명시(키 미설정/API 실패 등, 조용한 폴백 금지)
+            st.error(f"차종 수요 수집 실패: {type(e).__name__}: {e}")
+            return
+        st.session_state[_DEMAND_RESULTS_KEY] = (rows, trends, note, members_map)
 
     if note:
         st.warning(note)
@@ -664,19 +676,25 @@ def render_seasonal() -> None:
     with col_btn:
         if st.button("🔄 새로고침", key="season_refresh",
                      help="캐시를 비우고 데이터랩+검색광고를 다시 호출합니다."):
-            st.cache_data.clear()
+            _load_seasonal.clear()
+            st.session_state.pop(_SEASONAL_RESULTS_KEY, None)
             st.rerun()
     with col_note:
-        st.caption("1시간 캐시.")
+        st.caption("결과 세션 유지.")
 
     with st.expander("표 해석 주의 · 계절성 정의 · 한계", expanded=False):
         st.markdown(_SEASON_LIMITS_MD)
 
-    try:
-        rows, winter, note = _load_seasonal()
-    except Exception as e:  # noqa: BLE001 — 원인 명시(키 미설정/API 실패 등, 조용한 폴백 금지)
-        st.error(f"계절 제품 수집 실패: {type(e).__name__}: {e}")
-        return
+    _cached = st.session_state.get(_SEASONAL_RESULTS_KEY)
+    if _cached is not None:
+        rows, winter, note = _cached
+    else:
+        try:
+            rows, winter, note = _load_seasonal()
+        except Exception as e:  # noqa: BLE001 — 원인 명시(키 미설정/API 실패 등, 조용한 폴백 금지)
+            st.error(f"계절 제품 수집 실패: {type(e).__name__}: {e}")
+            return
+        st.session_state[_SEASONAL_RESULTS_KEY] = (rows, winter, note)
 
     if note:
         st.warning(note)
@@ -811,7 +829,7 @@ def render_keyword_explorer() -> None:
     with col_btn:
         if st.button("🔄 새로고침", key="explorer_refresh",
                      help="캐시를 비우고 검색광고를 다시 호출합니다."):
-            st.cache_data.clear()
+            _fetch_keyword_explorer.clear()
             st.rerun()
     with col_note:
         st.caption("검색광고 키워드도구(NAVER_AD_*) · 1시간 캐시.")
@@ -958,13 +976,14 @@ def render_teamp() -> None:
     with col_btn:
         if st.button("🔄 새로고침", key="teamp_refresh",
                      help="캐시를 비우고 검색광고+블로그 API를 다시 호출합니다."):
-            st.cache_data.clear()
+            _harvest_teamp_kw.clear()
+            st.session_state.pop(_TEAMP_RESULTS_KEY, None)
             for k in [k for k in st.session_state if k.startswith("_teamp_blog_")]:
                 del st.session_state[k]
             st.rerun()
     with col_note:
         st.caption(
-            f"키워드 수확 1시간 캐시 · 블로그 세션 캐시 · "
+            f"결과 세션 유지 · 탭 전환 재추출 없음 · "
             f"황금 < {config.TEAMP_RATIO_GOLD} / 해볼만 ≤ {config.TEAMP_RATIO_OK} / 초과 = 포화."
         )
 
@@ -975,31 +994,32 @@ def render_teamp() -> None:
         st.info("사이드바에 제품 키워드를 입력하세요. 예: 에어컨필터, 자동차에어컨필터")
         return
 
-    # 블로그 API 키 먼저 확인
-    cid = os.environ.get("NAVER_CLIENT_ID", "").strip()
-    csec = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
-    if not (cid and csec):
-        st.error(
-            "NAVER_CLIENT_ID/SECRET이 .env에 없어 블로그 문서수를 가져올 수 없습니다. "
-            "검색광고 API 키(NAVER_AD_*)와 별도로 데이터랩·블로그용 키를 .env에 추가하세요."
-        )
-        return
+    # 결과 캐시 확인 — 같은 키워드면 API 재호출 없이 즉시 표시
+    _cached = st.session_state.get(_TEAMP_RESULTS_KEY)
+    if _cached is not None and _cached["products"] == products:
+        rows = _cached["rows"]
+        failed_items = _cached["failed_items"]
+    else:
+        # 새로 수집 — 키워드 변경 또는 새로고침 시
+        cid = os.environ.get("NAVER_CLIENT_ID", "").strip()
+        csec = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
+        if not (cid and csec):
+            st.error(
+                "NAVER_CLIENT_ID/SECRET이 .env에 없어 블로그 문서수를 가져올 수 없습니다. "
+                "검색광고 API 키(NAVER_AD_*)와 별도로 데이터랩·블로그용 키를 .env에 추가하세요."
+            )
+            return
 
-    # Step 1: 연관 키워드 수확 (검색광고 키워드도구, 1시간 캐시)
-    try:
-        kw_items = _harvest_teamp_kw(tuple(products))
-    except Exception as e:  # noqa: BLE001
-        st.error(f"키워드 수확 실패: {type(e).__name__}: {e}")
-        return
+        try:
+            kw_items = _harvest_teamp_kw(tuple(products))
+        except Exception as e:  # noqa: BLE001
+            st.error(f"키워드 수확 실패: {type(e).__name__}: {e}")
+            return
 
-    if not kw_items:
-        st.info("표시할 데이터가 없습니다(제품명 포함 키워드가 없거나 검색량 <10만 있음).")
-        return
+        if not kw_items:
+            st.info("표시할 데이터가 없습니다(제품명 포함 키워드가 없거나 검색량 <10만 있음).")
+            return
 
-    # Step 2: 블로그 문서수 병렬 조회 (세션 캐시 — 정렬 변경 등 재렌더 시 재호출 방지)
-    blog_cache_key = f"_teamp_blog_{'|'.join(products)}_{cid[:4]}"
-
-    if blog_cache_key not in st.session_state:
         total = len(kw_items)
         prog = st.progress(0, f"블로그 문서수 조회 중... 0/{total}")
 
@@ -1013,9 +1033,12 @@ def render_teamp() -> None:
             on_progress=_prog_cb,
         )
         prog.empty()
-        st.session_state[blog_cache_key] = (rows, failed_items)
-    else:
-        rows, failed_items = st.session_state[blog_cache_key]
+
+        st.session_state[_TEAMP_RESULTS_KEY] = {
+            "products": products,
+            "rows": rows,
+            "failed_items": failed_items,
+        }
 
     if not rows and not failed_items:
         st.info("표시할 데이터가 없습니다.")
