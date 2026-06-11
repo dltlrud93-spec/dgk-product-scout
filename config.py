@@ -251,3 +251,30 @@ TREND_BASELINE_NEAR_ZERO = 1.0
 # 추세 '저신뢰(방향만)' 규모 상한 — 하한(MODEL_MIN_VOLUME) 근처. 시작값 2000. 멤버=1 도 저신뢰.
 # (작은 모델 데이터랩 추세는 노이즈 가능 → 비율 숫자 숨기고 방향만 표시.)
 TREND_LOWCONF_VOLUME = 2000
+
+# ---------------------------------------------------------------------------
+# 체험단 타겟 선정 모드 파라미터
+# ---------------------------------------------------------------------------
+# 비율 = 블로그 문서수(네이버 블로그 검색 total) ÷ 검색량(합산).
+#
+# 임계 설정 근거: 미확정(첫 추출 분포 보고 시경이 확정 — 추측으로 굳히지 않음).
+#   · GOLD=1.0: 비율 1 미만 = 글이 수요보다 적어 노릴 자리. 직관적 기준점.
+#   · OK=3.0:   비율 3 이하면 글이 많아도 수요 대비 3배 이내라 전략 가능.
+#   3.0 초과는 경쟁이 너무 깊어 후순위.
+#   ★ [확인 필요] 에어컨필터·자동차에어컨필터 첫 추출 분포 보고 조정.
+TEAMP_RATIO_GOLD = 1.0   # 비율 < 1.0 → 🟡 황금 (글이 수요보다 적음)
+TEAMP_RATIO_OK   = 3.0   # 1.0 ≤ 비율 ≤ 3.0 → 🟢 해볼만, 초과 → 🔴 포화/후순위
+
+# 네이버 블로그 검색 API (openapi.naver.com). 키: NAVER_CLIENT_ID/NAVER_CLIENT_SECRET (데이터랩 공통).
+# total 값만 필요 → display=1 로 문서 1건만 받아 처리량 최소화.
+# 처리한도 25,000/일(차종 수십 × 제품 수개는 충분히 여유). 캐싱(ttl=3600)으로 재호출 방지.
+NAVER_BLOG_SEARCH_URL = "https://openapi.naver.com/v1/search/blog.json"
+NAVER_BLOG_SEARCH_DISPLAY = 1
+# 429 방지(블로그 검색 API): max_workers 10→3 으로 낮추고 호출 전 지연 추가.
+# 근거: 10개 동시 호출 → 429 확인. 3개×0.1s 지연 = 실효 ~10req/s(API 응답지연 ~0.3s 감안).
+# [확인 필요] 429 재발 시 NAVER_BLOG_MAX_WORKERS 낮추거나 NAVER_BLOG_CALL_DELAY 높이기.
+NAVER_BLOG_MAX_WORKERS = 3          # 병렬 동시 호출 수 (10 → 429 확인, 3으로 낮춤)
+NAVER_BLOG_CALL_DELAY = 0.1         # 각 호출 전 지연(초). rate limit 완충.
+# 429 재시도 파라미터 (naver_adapter 패턴 동일: Retry-After 우선, 없으면 지수백오프).
+NAVER_BLOG_MAX_RETRIES = 3          # 429 최대 재시도 횟수
+NAVER_BLOG_BACKOFF_SECONDS = 1.0    # 첫 재시도 대기(초), 이후 2배씩 (1→2→4초)

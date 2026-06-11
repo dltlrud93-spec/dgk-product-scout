@@ -44,6 +44,13 @@ import seasonal_calendar as sc  # scripts/seasonal_calendar.py — fetch_shape/f
 from src.adapters.naver_adapter import NaverAdapter
 from src.core.car_demand import harvest_models, model_member_keywords, rank_models
 from src.core.car_models import load_car_models
+from src.core.teamp_mode import (
+    fetch_blog_count,
+    fetch_teamp_kw_rows_partial,
+    harvest_teamp_kw_items,
+    top_gold_kw_rows,
+    top_gold_kw_rows_by_ratio,
+)
 from src.core.search_volume import (
     FIELD_COMP_IDX,
     FIELD_MONTHLY_MOBILE,
@@ -53,6 +60,63 @@ from src.core.search_volume import (
 )
 
 st.set_page_config(page_title="dgk-product-scout", layout="wide")
+
+
+def _load_secrets_to_env() -> None:
+    """Streamlit Cloud Secrets → os.environ 브리지.
+
+    Streamlit Cloud 에서는 secrets.toml 키가 st.secrets 에 들어오지만
+    코드베이스 곳곳의 os.environ.get(...)은 그걸 보지 못한다.
+    앱 시작 시 한 번 호출해 두 공간을 동기화한다.
+    로컬(secrets.toml 없음 / 키 없음)이면 조용히 건너뜀.
+    """
+    _NAVER_ENV_KEYS = (
+        "NAVER_AD_API_KEY",
+        "NAVER_AD_SECRET_KEY",
+        "NAVER_AD_CUSTOMER_ID",
+        "NAVER_CLIENT_ID",
+        "NAVER_CLIENT_SECRET",
+    )
+    try:
+        for key in _NAVER_ENV_KEYS:
+            try:
+                val = st.secrets[key]
+                if val and not os.environ.get(key):
+                    os.environ[key] = str(val)
+            except KeyError:
+                pass
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _password_gate() -> bool:
+    """비밀번호 인증 게이트. 인증 전까지 앱 진입 차단.
+
+    st.secrets["auth"]["password"] 가 없으면(로컬 개발 환경) 게이트를 건너뛴다.
+    인증 성공 여부를 반환한다 — False 면 호출부에서 st.stop() 처리.
+    """
+    try:
+        expected = st.secrets["auth"]["password"]
+    except (KeyError, AttributeError):
+        return True  # 로컬 환경 — 게이트 없음
+
+    if st.session_state.get("_authenticated"):
+        return True
+
+    st.title("dgk-product-scout")
+    pw = st.text_input("비밀번호", type="password", key="_pw_input")
+    if st.button("로그인", key="_login_btn"):
+        if pw == expected:
+            st.session_state["_authenticated"] = True
+            st.rerun()
+        else:
+            st.error("비밀번호가 틀렸습니다.")
+    return False
+
+
+_load_secrets_to_env()
+if not _password_gate():
+    st.stop()
 
 
 def _fmt_vol_display(vol: int, low: bool) -> str:
@@ -622,14 +686,251 @@ def render_keyword_explorer() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 화면 4 — 체험단 타겟 선정 (차종×제품 검색량 + 블로그 문서수 + 비율 분류)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_TEAMP_LIMITS_MD = (
+    "**[주의] 블로그 문서수는 근사치이며 블로그 노출 난이도(블로그 지수)와 다릅니다.**\n\n"
+    "네이버 블로그 검색 API의 `total`은 네이버 내부 추정값으로 실제 노출 경쟁과는 차이가 있습니다. "
+    "비율이 낮은 후보가 우선순위 신호이지, 노출 보증이 아닙니다. "
+    "**후보 차종은 반드시 직접 검색해 경쟁 글의 품질·블로그 지수를 확인하세요.**"
+)
+
+_TEAMP_COLUMN_CONFIG = {
+    "키워드": st.column_config.TextColumn(
+        "키워드",
+        help="검색광고 키워드도구 연관 키워드 원문. 이 문자열 그대로 검색량과 문서수를 잽니다.",
+    ),
+    "차종": st.column_config.TextColumn(
+        "차종",
+        help="차종 인식 사전에서 인식된 차종명(표시용). 미인식 키워드는 빈칸.",
+    ),
+    "검색량": st.column_config.NumberColumn(
+        "검색량",
+        format="localized",
+        help="이 키워드의 PC+모바일 월간 검색량(검색광고 키워드도구 값).",
+    ),
+    "문서수": st.column_config.TextColumn(
+        "문서수",
+        help="네이버 블로그 검색 '{키워드 원문}' 결과의 total 값입니다. "
+             "근사치이며 실제 노출 경쟁(블로그 지수)을 반영하지 않습니다. "
+             "'–'는 429 재시도 소진으로 조회 실패한 항목입니다.",
+    ),
+    "비율": st.column_config.TextColumn(
+        "비율",
+        help=(
+            "문서수 ÷ 검색량 (동일 키워드 기준). "
+            "1 미만 = 블로그 글이 수요보다 적어 노릴 자리(황금), "
+            "3 초과 = 포화. "
+            "단 문서수는 근사치이고 상위 글의 블로그 지수는 반영 못 하니, "
+            "후보 키워드는 직접 검색해 경쟁 글 품질을 확인하세요."
+        ),
+    ),
+    "분류": st.column_config.TextColumn(
+        "분류",
+        help="🟡 황금: 비율 < 1.0 / 🟢 해볼만: 1.0 ≤ 비율 ≤ 3.0 / 🔴 포화/후순위: 비율 > 3.0",
+    ),
+}
+
+_TEAMP_TOP10_COLUMN_CONFIG = {
+    "키워드": st.column_config.TextColumn("키워드"),
+    "차종": st.column_config.TextColumn("차종"),
+    "검색량": st.column_config.NumberColumn("검색량", format="localized"),
+    "비율": st.column_config.NumberColumn("비율", format="%.2f"),
+}
+
+
+@st.cache_data(ttl=3600, show_spinner="키워드 수확 중 (검색광고)...")
+def _harvest_teamp_kw(products: tuple[str, ...]) -> list[tuple[str, str, int]]:
+    """제품 키워드 → 연관 키워드 수확 → (keyword, car_model, volume) 리스트.
+
+    반환: [(keyword, car_model_display, volume), ...] 검색량 내림차순.
+    volume=0(원래 '<10') 키워드는 harvest 단계에서 제외.
+    차종 인식(car_model)은 표시 전용 — 필터·그룹핑 미사용.
+    """
+    idx = load_car_models()
+    adapter = NaverAdapter(list(products))  # NAVER_AD_* 키 검증
+    return harvest_teamp_kw_items(adapter, list(products), idx)
+
+
+def render_teamp() -> None:
+    st.title("체험단 타겟 선정")
+    st.caption(
+        "제품 키워드 → 연관 키워드 수확 → 키워드별 검색량 × 블로그 문서수 → 비율 분류. "
+        "비율 낮은 키워드가 체험단 블로그 공략 후보입니다. "
+        "단위 = 개별 연관 키워드(합산 없음) · 단일 매력도 점수 없음."
+    )
+
+    # 사이드바: 제품 키워드 입력 + 정렬
+    product_text = st.sidebar.text_area(
+        "제품 키워드(쉼표 또는 줄바꿈 구분)",
+        key="teamp_products",
+        help="예: 에어컨필터, 자동차에어컨필터. 각 키워드를 시드로 연관 키워드를 수확해 경쟁도를 분석합니다.",
+    )
+    sort_label = st.sidebar.radio(
+        "본표 정렬",
+        ["비율 오름차순 (황금 위)", "검색량 내림차순"],
+        key="teamp_sort",
+        help="기본: 비율 오름차순(황금 후보가 위). 검색량순으로 바꾸면 규모 큰 키워드를 먼저 볼 수 있습니다.",
+    )
+    top10_sort_label = st.sidebar.radio(
+        "황금 TOP10 정렬",
+        ["검색량 높은 순", "비율 낮은 순"],
+        key="teamp_top10_sort",
+        help="황금(🟡) 중 어떤 순서로 TOP10을 뽑을지 선택합니다.",
+    )
+
+    products = [s.strip() for s in product_text.replace(",", "\n").splitlines() if s.strip()]
+
+    col_btn, col_note = st.columns([1, 4])
+    with col_btn:
+        if st.button("🔄 새로고침", key="teamp_refresh",
+                     help="캐시를 비우고 검색광고+블로그 API를 다시 호출합니다."):
+            st.cache_data.clear()
+            for k in [k for k in st.session_state if k.startswith("_teamp_blog_")]:
+                del st.session_state[k]
+            st.rerun()
+    with col_note:
+        st.caption(
+            f"키워드 수확 1시간 캐시 · 블로그 문서수 세션 캐시 · "
+            f"임계: 황금 비율 < {config.TEAMP_RATIO_GOLD} / "
+            f"해볼만 ≤ {config.TEAMP_RATIO_OK} / 초과 = 포화."
+        )
+
+    st.warning(_TEAMP_LIMITS_MD)
+
+    if not products:
+        st.info("사이드바에 제품 키워드를 입력하세요. 예: 에어컨필터, 자동차에어컨필터")
+        return
+
+    # 블로그 API 키 먼저 확인
+    cid = os.environ.get("NAVER_CLIENT_ID", "").strip()
+    csec = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
+    if not (cid and csec):
+        st.error(
+            "NAVER_CLIENT_ID/SECRET이 .env에 없어 블로그 문서수를 가져올 수 없습니다. "
+            "검색광고 API 키(NAVER_AD_*)와 별도로 데이터랩·블로그용 키를 .env에 추가하세요."
+        )
+        return
+
+    # Step 1: 연관 키워드 수확 (검색광고 키워드도구, 1시간 캐시)
+    try:
+        kw_items = _harvest_teamp_kw(tuple(products))
+    except Exception as e:  # noqa: BLE001
+        st.error(f"키워드 수확 실패: {type(e).__name__}: {e}")
+        return
+
+    if not kw_items:
+        st.info("표시할 데이터가 없습니다(제품명 포함 키워드가 없거나 검색량 <10만 있음).")
+        return
+
+    # Step 2: 블로그 문서수 병렬 조회 (세션 캐시 — 정렬 변경 등 재렌더 시 재호출 방지)
+    blog_cache_key = f"_teamp_blog_{'|'.join(products)}_{cid[:4]}"
+
+    if blog_cache_key not in st.session_state:
+        total = len(kw_items)
+        prog = st.progress(0, f"블로그 문서수 조회 중... 0/{total}")
+
+        def _prog_cb(done: int, tot: int) -> None:
+            prog.progress(done / tot, f"블로그 문서수 조회 중... {done}/{tot}")
+
+        rows, failed_items = fetch_teamp_kw_rows_partial(
+            kw_items,
+            lambda q: fetch_blog_count(q, cid, csec),
+            max_workers=config.NAVER_BLOG_MAX_WORKERS,
+            on_progress=_prog_cb,
+        )
+        prog.empty()
+        st.session_state[blog_cache_key] = (rows, failed_items)
+    else:
+        rows, failed_items = st.session_state[blog_cache_key]
+
+    if not rows and not failed_items:
+        st.info("표시할 데이터가 없습니다.")
+        return
+
+    # ── 황금 키워드 TOP 10 ──────────────────────────────────────────────────
+    if top10_sort_label == "비율 낮은 순":
+        top10 = top_gold_kw_rows_by_ratio(rows, n=10)
+    else:
+        top10 = top_gold_kw_rows(rows, n=10)
+
+    grade_counts = {"🟡 황금": 0, "🟢 해볼만": 0, "🔴 포화/후순위": 0}
+    for r in rows:
+        grade_counts[r.grade] = grade_counts.get(r.grade, 0) + 1
+
+    st.subheader("🟡 황금 키워드 TOP 10")
+    st.caption(
+        f"분류별: 🟡 황금 {grade_counts['🟡 황금']}개 · "
+        f"🟢 해볼만 {grade_counts['🟢 해볼만']}개 · "
+        f"🔴 포화/후순위 {grade_counts['🔴 포화/후순위']}개"
+        + (f" · ⚠️ 조회실패 {len(failed_items)}건" if failed_items else "")
+        + f" (정렬: {top10_sort_label})"
+    )
+    if top10:
+        st.dataframe(
+            [{"키워드": r.keyword, "차종": r.car_model,
+              "검색량": r.volume, "비율": round(r.ratio, 2)}
+             for r in top10],
+            use_container_width=True,
+            hide_index=True,
+            column_config=_TEAMP_TOP10_COLUMN_CONFIG,
+        )
+    else:
+        st.info("황금 분류 후보가 없습니다(전체가 해볼만 이상).")
+
+    # ── 본표 ────────────────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("본표")
+    if sort_label == "검색량 내림차순":
+        shown = sorted(rows, key=lambda r: r.volume, reverse=True)
+    else:
+        shown = sorted(rows, key=lambda r: r.ratio)
+
+    st.caption(
+        f"{sort_label} · {len(shown)}행"
+        + (f" + 실패 {len(failed_items)}건" if failed_items else "")
+        + f" · 제품 키워드: {', '.join(products)} (열 머리글 클릭 시 정렬)"
+    )
+
+    table_rows = [
+        {"키워드": r.keyword, "차종": r.car_model, "검색량": r.volume,
+         "문서수": f"{r.doc_count:,}", "비율": f"{r.ratio:.2f}", "분류": r.grade}
+        for r in shown
+    ]
+    # 조회 실패 항목: 맨 아래, 문서수·비율 '–'
+    for kw, cm, v in failed_items:
+        table_rows.append({
+            "키워드": kw, "차종": cm, "검색량": v,
+            "문서수": "–", "비율": "–", "분류": "⚠️ 조회실패",
+        })
+
+    st.dataframe(
+        table_rows,
+        use_container_width=True,
+        hide_index=True,
+        column_config=_TEAMP_COLUMN_CONFIG,
+    )
+
+    if failed_items:
+        st.warning(
+            f"⚠️ {len(failed_items)}건 조회 실패 (429 재시도 소진) — "
+            "새로고침으로 재시도하거나, 잠시 후 다시 시도하세요: "
+            + ", ".join(kw for kw, _, _ in failed_items)
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 사이드바 화면 선택 → 디스패치
 # ═══════════════════════════════════════════════════════════════════════════
-_SCREEN = st.sidebar.radio("화면 선택", ["차종 수요", "계절 제품", "키워드 탐색기"])
+_SCREEN = st.sidebar.radio("화면 선택", ["차종 수요", "계절 제품", "키워드 탐색기", "체험단 타겟"])
 st.sidebar.divider()
 
 if _SCREEN == "차종 수요":
     render_car_demand()
 elif _SCREEN == "계절 제품":
     render_seasonal()
+elif _SCREEN == "체험단 타겟":
+    render_teamp()
 else:
     render_keyword_explorer()
