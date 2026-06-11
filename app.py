@@ -69,6 +69,11 @@ def _load_secrets_to_env() -> None:
     코드베이스 곳곳의 os.environ.get(...)은 그걸 보지 못한다.
     앱 시작 시 한 번 호출해 두 공간을 동기화한다.
     로컬(secrets.toml 없음 / 키 없음)이면 조용히 건너뜀.
+
+    ★TOML 섹션 주의: 네이버 키는 [auth] 섹션 '위'에 위치해야 최상위 키로 읽힌다.
+      섹션 헤더 이후의 키는 해당 섹션에 속하므로 st.secrets["NAVER_AD_API_KEY"]가 아닌
+      st.secrets["auth"]["NAVER_AD_API_KEY"]가 된다.
+      이 함수는 올바른 위치(최상위)를 먼저 시도하고, 실수로 [auth] 아래 넣은 경우도 복구한다.
     """
     _NAVER_ENV_KEYS = (
         "NAVER_AD_API_KEY",
@@ -79,12 +84,22 @@ def _load_secrets_to_env() -> None:
     )
     try:
         for key in _NAVER_ENV_KEYS:
+            if os.environ.get(key):
+                continue
+            val = None
+            # 1순위: 최상위(올바른 위치 — TOML에서 [auth] 위에 선언된 키)
             try:
                 val = st.secrets[key]
-                if val and not os.environ.get(key):
-                    os.environ[key] = str(val)
             except KeyError:
                 pass
+            # 2순위: [auth] 아래(TOML 순서 실수로 [auth] 뒤에 넣었을 때 복구)
+            if not val:
+                try:
+                    val = st.secrets["auth"][key]
+                except (KeyError, AttributeError):
+                    pass
+            if val:
+                os.environ[key] = str(val)
     except Exception:  # noqa: BLE001
         pass
 
