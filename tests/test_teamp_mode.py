@@ -37,6 +37,8 @@ from src.core.teamp_mode import (
     fetch_recent_3m_docs_partial,
     fetch_teamp_kw_rows_partial,
     fetch_teamp_rows_partial,
+    format_recent_3m,
+    format_recent_ratio,
     harvest_teamp_kw_items,
     top_gold_kw_rows,
     top_gold_kw_rows_by_ratio,
@@ -808,3 +810,55 @@ def test_recent_3m_docs_empty_rows():
     """빈 리스트 입력 → 그대로 반환, 예외 없음."""
     result = fetch_recent_3m_docs_partial([], lambda q: 0, max_workers=1)
     assert result == []
+
+
+# ─────────────────── 표시 포맷터 — format_recent_3m / format_recent_ratio ─────
+# ★ 회귀 방지: 라이브에서 None(미조회·429 실패 행)을 처음 만나 비교 에러가 난 버그.
+#   None 케이스를 비교·산술 '전에' 가드하는지 반드시 검증.
+
+def test_format_recent_3m_none_returns_dash():
+    """None(미조회·실패) → '—'. 숫자 비교 전에 가드 — None >= int 에러 금지."""
+    assert format_recent_3m(None) == "—"
+
+
+@pytest.mark.parametrize("val,expected", [
+    (0,   "🟢 0 최고"),
+    (5,   "🟢 5 최고"),       # GOOD(6) 미만 경계
+    (6,   "🟢 6 노려볼만"),    # GOOD 경계
+    (29,  "🟢 29 노려볼만"),   # BUSY(30) 미만 경계
+    (30,  "🟡 30 보통"),       # BUSY 경계
+    (99,  "🟡 99 보통"),       # HOT(100) 미만 경계
+    (100, "🔴 100+ 비추천"),   # HOT 경계(상한 도달)
+    (150, "🔴 100+ 비추천"),
+])
+def test_format_recent_3m_traffic_light_boundaries(val, expected):
+    assert format_recent_3m(val) == expected
+
+
+def test_format_recent_ratio_none_recent_returns_dash():
+    """recent=None → '—' (산술 전 가드)."""
+    assert format_recent_ratio(None, 1000) == "—"
+
+
+def test_format_recent_ratio_zero_doc_count_returns_dash():
+    """doc_count=0 → '—' (0으로 나누기 금지)."""
+    assert format_recent_ratio(5, 0) == "—"
+
+
+def test_format_recent_ratio_none_doc_count_returns_dash():
+    """doc_count=None → '—' (None 나누기 금지)."""
+    assert format_recent_ratio(5, None) == "—"
+
+
+def test_format_recent_ratio_cap_returns_dash():
+    """recent ≥ 상한(100) → 분자 과소라 계산 금지, '—'."""
+    assert format_recent_ratio(config.NAVER_BLOG_SEARCH_RECENT_DISPLAY, 5000) == "—"
+    assert format_recent_ratio(150, 5000) == "—"
+
+
+def test_format_recent_ratio_normal_values():
+    """정상 케이스: 비중 = 최근 ÷ 전체 × 100, 소수 1자리 + %."""
+    assert format_recent_ratio(2, 1500) == "0.1%"     # 소나타디엣지 케이스
+    assert format_recent_ratio(0, 200) == "0.0%"      # HUWELL 케이스(최근 0건)
+    assert format_recent_ratio(50, 100) == "50.0%"
+    assert format_recent_ratio(99, 100) == "99.0%"    # 상한 직전은 계산

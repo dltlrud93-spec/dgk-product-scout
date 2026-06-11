@@ -452,6 +452,41 @@ def top_gold_kw_rows_by_ratio(rows: list[TeampKwRow], n: int = 10) -> list[Teamp
     return gold[:n]
 
 
+def format_recent_3m(val: Optional[int]) -> str:
+    """최근3개월 → 신호등 라벨 (표시 전용).
+
+    None(미조회·실패) → '—'. 숫자 비교는 None 가드 이후에만 수행.
+    임계: config.TEAMP_RECENT_HOT(100) / TEAMP_RECENT_BUSY(30) / TEAMP_RECENT_GOOD(6).
+    """
+    if val is None:
+        return "—"
+    if val >= config.TEAMP_RECENT_HOT:
+        return "🔴 100+ 비추천"
+    if val >= config.TEAMP_RECENT_BUSY:
+        return f"🟡 {val} 보통"
+    if val >= config.TEAMP_RECENT_GOOD:
+        return f"🟢 {val} 노려볼만"
+    return f"🟢 {val} 최고"
+
+
+def format_recent_ratio(recent_3m_docs: Optional[int], doc_count: Optional[int]) -> str:
+    """최근비중(%) = 최근3개월 ÷ 전체문서 × 100 (표시 전용).
+
+    '—' 반환 조건 (산술 전에 전부 가드):
+    · recent_3m_docs None(미조회·실패)
+    · recent_3m_docs ≥ 상한(NAVER_BLOG_SEARCH_RECENT_DISPLAY) — 분자가 과소(실제는 그 이상일 수 있음)
+    · doc_count None 또는 0 — 분모 없음
+    """
+    if recent_3m_docs is None:
+        return "—"
+    if recent_3m_docs >= config.NAVER_BLOG_SEARCH_RECENT_DISPLAY:
+        return "—"
+    if not doc_count:
+        return "—"
+    pct = recent_3m_docs / doc_count * 100
+    return f"{pct:.1f}%"
+
+
 def fetch_recent_3m_docs_partial(
     rows: list[TeampKwRow],
     recent_blog_fn: Callable[[str], int],

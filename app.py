@@ -49,6 +49,8 @@ from src.core.teamp_mode import (
     fetch_recent_blog_count,
     fetch_recent_3m_docs_partial,
     fetch_teamp_kw_rows_partial,
+    format_recent_3m,
+    format_recent_ratio,
     harvest_teamp_kw_items,
     top_gold_kw_rows,
     top_gold_kw_rows_by_ratio,
@@ -234,32 +236,6 @@ _KST = timezone(timedelta(hours=9))
 def _kst_today() -> date:
     """오늘 날짜(KST). 발주 데드라인은 캐시(_load_seasonal)와 무관하게 매 렌더 현재 날짜로 계산."""
     return datetime.now(_KST).date()
-
-
-def _fmt_recent_3m(val) -> str:
-    """최근3개월 → 신호등 라벨. None = 미조회('—')."""
-    if val is None:
-        return "—"
-    if val >= config.TEAMP_RECENT_HOT:
-        return "🔴 100+ 비추천"
-    if val >= config.TEAMP_RECENT_BUSY:
-        return f"🟡 {val} 보통"
-    if val >= config.TEAMP_RECENT_GOOD:
-        return f"🟢 {val} 노려볼만"
-    return f"🟢 {val} 최고"
-
-
-def _fmt_recent_ratio(recent_3m_docs, doc_count: int) -> str:
-    """최근비중(%) = 최근3개월 ÷ 전체문서 × 100.
-    상한(≥ NAVER_BLOG_SEARCH_RECENT_DISPLAY) 도달 시 분자가 과소 → '—' 반환."""
-    if recent_3m_docs is None:
-        return "—"
-    if recent_3m_docs >= config.NAVER_BLOG_SEARCH_RECENT_DISPLAY:
-        return "—"
-    if doc_count == 0:
-        return "—"
-    pct = recent_3m_docs / doc_count * 100
-    return f"{pct:.1f}%"
 
 
 def order_deadline_status(rising_month: int, today: date) -> tuple[date, str]:
@@ -1201,8 +1177,8 @@ def render_teamp() -> None:
             "검색량": r.volume,
             "문서수": f"{r.doc_count:,}",
             "비율": f"{r.ratio:.2f}",
-            "최근3개월": _fmt_recent_3m(r.recent_3m_docs),
-            "최근비중": _fmt_recent_ratio(r.recent_3m_docs, r.doc_count),
+            "최근3개월": format_recent_3m(r.recent_3m_docs),
+            "최근비중": format_recent_ratio(r.recent_3m_docs, r.doc_count),
             "분류": r.grade,
             "차종": r.car_model,
         }
