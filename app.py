@@ -134,6 +134,54 @@ if not _password_gate():
     st.stop()
 
 
+# ── UI 헬퍼 ──────────────────────────────────────────────────────────────────
+_CSS = """<style>
+.dgk-chip{background:#f8f9fa;border:0.5px solid #dee2e6;border-radius:8px;
+          padding:10px 14px;text-align:center;margin-bottom:4px;}
+.dgk-chip-label{font-size:11.5px;color:#6b7280;margin-bottom:2px;}
+.dgk-chip-value{font-size:22px;font-weight:500;color:#111827;line-height:1.2;}
+.dgk-hl{background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;
+        padding:14px 18px;margin-bottom:12px;}
+.dgk-hl-title{font-size:13px;font-weight:500;color:#92400e;margin-bottom:6px;}
+.dgk-pills{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;}
+.dgk-pill{background:#fff;border:1px solid #fbbf24;border-radius:20px;
+          padding:3px 10px;font-size:12.5px;color:#92400e;white-space:nowrap;}
+.dgk-pill-sub{font-size:11px;color:#b45309;margin-left:3px;}
+</style>"""
+
+
+def _inject_css() -> None:
+    st.markdown(_CSS, unsafe_allow_html=True)
+
+
+def _chips(items: list) -> None:
+    """요약 칩 한 줄 — items = [(label, value_str), ...]"""
+    cols = st.columns(len(items))
+    for col, (label, value) in zip(cols, items):
+        col.markdown(
+            f'<div class="dgk-chip"><div class="dgk-chip-label">{label}</div>'
+            f'<div class="dgk-chip-value">{value}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+
+def _highlight_card(title: str, pills: list) -> None:
+    """amber 강조 카드 — pills = [(text, sub_text), ...]"""
+    if not pills:
+        return
+    pills_html = "".join(
+        f'<span class="dgk-pill">{p}'
+        + (f'<span class="dgk-pill-sub">{s}</span>' if s else "")
+        + "</span>"
+        for p, s in pills
+    )
+    st.markdown(
+        f'<div class="dgk-hl"><div class="dgk-hl-title">{title}</div>'
+        f'<div class="dgk-pills">{pills_html}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
 def _fmt_vol_display(vol: int, low: bool) -> str:
     """표시 전용 검색량 포맷. low(원래 '< 10')면 '<10', 아니면 천단위 콤마.
     ★숫자를 만들어내지 않는다 — '<10' 은 네이버가 정확값을 안 주는 항목의 표시일 뿐."""
@@ -311,10 +359,11 @@ def _demand_table_rows(rows, trends):
 
 
 def render_car_demand() -> None:
+    _inject_css()
     st.title("차종 수요 — 모델별 규모 + 추세")
     st.caption(
         "부품 시드 수확 → 차종 인식 → 모델별 합산 규모(C-3) + 데이터랩 월별 추세(C-4). "
-        "규모·추세 별도 컬럼 — 단일 매력도 점수 없음. (단순 표시 — 등록 대조 없음)"
+        "규모·추세 별도 컬럼 — 단일 매력도 점수 없음."
     )
 
     col_btn, col_note = st.columns([1, 4])
@@ -325,12 +374,12 @@ def render_car_demand() -> None:
             st.rerun()
     with col_note:
         st.caption(
-            f"API 응답은 1시간 캐시됩니다(클릭마다 재호출 방지 · rate limit 보호). "
-            f"컷 MODEL_MIN_VOLUME={config.MODEL_MIN_VOLUME:,} · "
+            f"1시간 캐시 · 컷 MODEL_MIN_VOLUME={config.MODEL_MIN_VOLUME:,} · "
             f"추세 {config.TREND_RECENT_MONTHS}개월÷{config.TREND_BASELINE_MONTHS}개월."
         )
 
-    st.info(_LIMITS_MD)
+    with st.expander("표 해석 주의 · 한계", expanded=False):
+        st.markdown(_LIMITS_MD)
 
     try:
         rows, trends, note, members_map = _load_car_demand()
@@ -343,6 +392,29 @@ def render_car_demand() -> None:
     if not rows:
         st.info("표시할 모델이 없습니다(수확 결과가 컷 미만이거나 비었음).")
         return
+
+    # 요약 칩
+    n_up = sum(
+        1 for r in rows
+        if trends.get(r.canonical) is not None and trends[r.canonical].direction == "↑"
+    )
+    n_new = sum(
+        1 for r in rows
+        if trends.get(r.canonical) is not None and trends[r.canonical].new_candidate
+    )
+    _chips([("총 모델", str(len(rows))), ("추세 ↑", str(n_up)), ("신규 후보", str(n_new))])
+
+    # 핵심 강조 카드: 추세 상승 + 신규 후보
+    hl_rows = [
+        r for r in rows
+        if trends.get(r.canonical) is not None
+        and (trends[r.canonical].new_candidate or trends[r.canonical].direction == "↑")
+    ]
+    hl_pills = [
+        (r.canonical, "신규 후보" if trends[r.canonical].new_candidate else "↑")
+        for r in hl_rows[:8]
+    ]
+    _highlight_card("📈 추세 상승 · 신규 후보 차종", hl_pills)
 
     # 뷰 선택 — 터미널의 세 뷰와 동일.
     view = st.radio(
@@ -526,6 +598,7 @@ def _season_row(r: dict, deadline: date, status: str) -> dict:
 
 
 def render_seasonal() -> None:
+    _inject_css()
     st.title("계절 제품 — 계절성 + 규모(단일 키워드)")
     st.caption(
         "데이터랩 계절성(모양) + 검색광고 단일 키워드 규모. 규모·계절성 별도 컬럼 — "
@@ -533,6 +606,7 @@ def render_seasonal() -> None:
     )
 
     # 화면 전용 사이드바 입력(정렬·필터).
+    st.sidebar.markdown("**정렬 · 필터**")
     sort_label = st.sidebar.radio(
         "정렬", ["규모순", "계절성순", "발주 임박순"], key="season_sort",
         help="발주 임박순 = 발주 마감일 가까운 순(이미 늦은 상품은 내년 마감이라 뒤로 갑니다).",
@@ -549,9 +623,10 @@ def render_seasonal() -> None:
             st.cache_data.clear()
             st.rerun()
     with col_note:
-        st.caption("API 응답은 1시간 캐시됩니다(클릭마다 재호출 방지 · rate limit 보호).")
+        st.caption("1시간 캐시.")
 
-    st.info(_SEASON_LIMITS_MD)
+    with st.expander("표 해석 주의 · 계절성 정의 · 한계", expanded=False):
+        st.markdown(_SEASON_LIMITS_MD)
 
     try:
         rows, winter, note = _load_seasonal()
@@ -572,6 +647,21 @@ def render_seasonal() -> None:
     # 발주 데드라인/상태는 추천 필터와 독립 — 모든 행에 대해 오늘 기준으로 계산(늦음도 숨기지 않음).
     today = _kst_today()
     status_of = {id(r): order_deadline_status(r["rising_month"], today) for r in rows}
+
+    # 요약 칩
+    n_recommend = sum(1 for r in rows if passes(r))
+    n_prime = sum(1 for r in rows if status_of[id(r)][1] == "🟢 지금 발주 적기")
+    n_seasonal = sum(1 for r in rows if r["index"] >= 1.8)
+    _chips([
+        ("추천 후보", str(n_recommend)),
+        ("발주 적기 🟢", str(n_prime)),
+        ("계절성 있음", str(n_seasonal)),
+    ])
+
+    # 핵심 강조 카드: 발주 적기 제품
+    prime_rows = [r for r in rows if status_of[id(r)][1] == "🟢 지금 발주 적기"]
+    prime_pills = [(r["keyword"], status_of[id(r)][0].isoformat() + "까지") for r in prime_rows[:8]]
+    _highlight_card("🟢 지금 발주 적기 제품", prime_pills)
 
     kept = [r for r in rows if (not apply_filter) or passes(r)]
     if sort_label == "발주 임박순":            # 마감일 가까운 순(늦음=내년 마감이라 뒤로).
@@ -650,12 +740,14 @@ _EXPLORER_COLUMN_CONFIG = {
 
 
 def render_keyword_explorer() -> None:
+    _inject_css()
     st.title("키워드 탐색기")
     st.caption(
-        "정해진 시드 외에 즉석으로 키워드를 검색량과 함께 확인하는 탐색 도구입니다. "
-        "좋다/나쁘다 판정은 하지 않습니다 — 사실만 보여줍니다."
+        "시드 → 연관 키워드 수확 → 검색량·경쟁도 확인. "
+        "판정 없음 — 사실만 보여줍니다."
     )
 
+    st.sidebar.markdown("**시드 입력**")
     seed_text = st.sidebar.text_area(
         "시드 키워드(줄바꿈 또는 쉼표로 구분)",
         key="explorer_seeds",
@@ -670,7 +762,7 @@ def render_keyword_explorer() -> None:
             st.cache_data.clear()
             st.rerun()
     with col_note:
-        st.caption("검색광고 키워드도구(NAVER_AD_*) 사용 · 결과 1시간 캐시.")
+        st.caption("검색광고 키워드도구(NAVER_AD_*) · 1시간 캐시.")
 
     if not seeds:
         st.info("사이드바에 시드 키워드를 입력하세요.")
@@ -687,6 +779,16 @@ def render_keyword_explorer() -> None:
         return
 
     items = sorted(data.items(), key=lambda kv: kv[1][0], reverse=True)  # 검색량 내림차순
+
+    # 요약 칩
+    n_low = sum(1 for _, (_, low, _) in items if low)
+    n_high = sum(1 for _, (_, _, comp) in items if comp == "높음")
+    _chips([
+        ("총 키워드", str(len(items))),
+        ("검색량 <10", str(n_low)),
+        ("경쟁 높음", str(n_high)),
+    ])
+
     table = [
         {"키워드": rel, "검색량(PC+모바일)": _fmt_vol_display(vol, low), "경쟁도": comp or "-"}
         for rel, (vol, low, comp) in items
@@ -769,27 +871,30 @@ def _harvest_teamp_kw(products: tuple[str, ...]) -> list[tuple[str, str, int]]:
 
 
 def render_teamp() -> None:
+    _inject_css()
     st.title("체험단 타겟 선정")
     st.caption(
         "제품 키워드 → 연관 키워드 수확 → 키워드별 검색량 × 블로그 문서수 → 비율 분류. "
-        "비율 낮은 키워드가 체험단 블로그 공략 후보입니다. "
-        "단위 = 개별 연관 키워드(합산 없음) · 단일 매력도 점수 없음."
+        "비율 낮은 키워드가 체험단 공략 후보입니다."
     )
 
     # 사이드바: 제품 키워드 입력 + 정렬
+    st.sidebar.markdown("**제품 키워드**")
     product_text = st.sidebar.text_area(
-        "제품 키워드(쉼표 또는 줄바꿈 구분)",
+        "쉼표 또는 줄바꿈 구분",
         key="teamp_products",
         help="예: 에어컨필터, 자동차에어컨필터. 각 키워드를 시드로 연관 키워드를 수확해 경쟁도를 분석합니다.",
     )
+    st.sidebar.divider()
+    st.sidebar.markdown("**정렬**")
     sort_label = st.sidebar.radio(
-        "본표 정렬",
+        "본표",
         ["비율 오름차순 (황금 위)", "검색량 내림차순"],
         key="teamp_sort",
         help="기본: 비율 오름차순(황금 후보가 위). 검색량순으로 바꾸면 규모 큰 키워드를 먼저 볼 수 있습니다.",
     )
     top10_sort_label = st.sidebar.radio(
-        "황금 TOP10 정렬",
+        "황금 TOP10",
         ["검색량 높은 순", "비율 낮은 순"],
         key="teamp_top10_sort",
         help="황금(🟡) 중 어떤 순서로 TOP10을 뽑을지 선택합니다.",
@@ -807,12 +912,12 @@ def render_teamp() -> None:
             st.rerun()
     with col_note:
         st.caption(
-            f"키워드 수확 1시간 캐시 · 블로그 문서수 세션 캐시 · "
-            f"임계: 황금 비율 < {config.TEAMP_RATIO_GOLD} / "
-            f"해볼만 ≤ {config.TEAMP_RATIO_OK} / 초과 = 포화."
+            f"키워드 수확 1시간 캐시 · 블로그 세션 캐시 · "
+            f"황금 < {config.TEAMP_RATIO_GOLD} / 해볼만 ≤ {config.TEAMP_RATIO_OK} / 초과 = 포화."
         )
 
-    st.warning(_TEAMP_LIMITS_MD)
+    with st.expander("블로그 문서수 주의 · 한계", expanded=False):
+        st.markdown(_TEAMP_LIMITS_MD)
 
     if not products:
         st.info("사이드바에 제품 키워드를 입력하세요. 예: 에어컨필터, 자동차에어컨필터")
@@ -864,7 +969,7 @@ def render_teamp() -> None:
         st.info("표시할 데이터가 없습니다.")
         return
 
-    # ── 황금 키워드 TOP 10 ──────────────────────────────────────────────────
+    # ── 요약 칩 + 황금 TOP10 카드 ────────────────────────────────────────────
     if top10_sort_label == "비율 낮은 순":
         top10 = top_gold_kw_rows_by_ratio(rows, n=10)
     else:
@@ -874,23 +979,18 @@ def render_teamp() -> None:
     for r in rows:
         grade_counts[r.grade] = grade_counts.get(r.grade, 0) + 1
 
-    st.subheader("🟡 황금 키워드 TOP 10")
-    st.caption(
-        f"분류별: 🟡 황금 {grade_counts['🟡 황금']}개 · "
-        f"🟢 해볼만 {grade_counts['🟢 해볼만']}개 · "
-        f"🔴 포화/후순위 {grade_counts['🔴 포화/후순위']}개"
-        + (f" · ⚠️ 조회실패 {len(failed_items)}건" if failed_items else "")
-        + f" (정렬: {top10_sort_label})"
-    )
+    chip_items = [
+        ("🟡 황금", str(grade_counts["🟡 황금"])),
+        ("🟢 해볼만", str(grade_counts["🟢 해볼만"])),
+        ("🔴 포화/후순위", str(grade_counts["🔴 포화/후순위"])),
+    ]
+    if failed_items:
+        chip_items.append(("⚠️ 조회실패", str(len(failed_items))))
+    _chips(chip_items)
+
     if top10:
-        st.dataframe(
-            [{"키워드": r.keyword, "차종": r.car_model,
-              "검색량": r.volume, "비율": round(r.ratio, 2)}
-             for r in top10],
-            use_container_width=True,
-            hide_index=True,
-            column_config=_TEAMP_TOP10_COLUMN_CONFIG,
-        )
+        top_pills = [(r.keyword, f"비율 {r.ratio:.2f}") for r in top10]
+        _highlight_card(f"🟡 황금 TOP {len(top10)} — {top10_sort_label}", top_pills)
     else:
         st.info("황금 분류 후보가 없습니다(전체가 해볼만 이상).")
 
@@ -938,7 +1038,12 @@ def render_teamp() -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 # 사이드바 화면 선택 → 디스패치
 # ═══════════════════════════════════════════════════════════════════════════
-_SCREEN = st.sidebar.radio("화면 선택", ["차종 수요", "계절 제품", "키워드 탐색기", "체험단 타겟"])
+st.sidebar.markdown("**화면 선택**")
+_SCREEN = st.sidebar.radio(
+    "화면 선택",
+    ["차종 수요", "계절 제품", "키워드 탐색기", "체험단 타겟"],
+    label_visibility="collapsed",
+)
 st.sidebar.divider()
 
 if _SCREEN == "차종 수요":
