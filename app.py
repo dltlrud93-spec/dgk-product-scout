@@ -955,13 +955,11 @@ def _harvest_teamp_kw(products: tuple[str, ...]) -> list[tuple[str, str, int]]:
 def render_teamp() -> None:
     _inject_css()
 
-    # ── TEMP DEBUG (진단 후 삭제) ────────────────────────────────────────────────
-    st.write("🔧 DEBUG:", {
-        "session_keys": [k for k in st.session_state.keys() if "teamp" in k.lower()],
-        "results_저장됨": "_teamp_results" in st.session_state,
-        "마지막_키워드": st.session_state.get("_teamp_last_keywords", "(없음)"),
-    })
-    # ── END TEMP DEBUG ────────────────────────────────────────────────────────────
+    # 위젯 렌더 전: 캐시 조회 + 탭 복귀 시 text_area 복원 (위젯 evict 대응)
+    _cached = st.session_state.get(_TEAMP_RESULTS_KEY)
+    _last_kws = st.session_state.get("_teamp_last_keywords")
+    if _last_kws and "teamp_products" not in st.session_state:
+        st.session_state["teamp_products"] = ", ".join(_last_kws)
 
     st.title("체험단 타겟 선정")
     st.caption(
@@ -998,7 +996,7 @@ def render_teamp() -> None:
 
     products = [s.strip() for s in product_text.replace(",", "\n").splitlines() if s.strip()]
 
-    # 진단용: 비위젯 키로 마지막 키워드 별도 저장 (탭 전환 후에도 보존 여부 확인용)
+    # 마지막 키워드 보존 (비위젯 키 → 탭 전환 후에도 유지)
     if products:
         st.session_state["_teamp_last_keywords"] = products
 
@@ -1020,13 +1018,16 @@ def render_teamp() -> None:
     with st.expander("블로그 문서수 주의 · 한계", expanded=False):
         st.markdown(_TEAMP_LIMITS_MD)
 
+    # products=[] 이면서 캐시가 살아있으면 → 탭 복귀 케이스, 캐시에서 복원
     if not products:
-        st.info("사이드바에 제품 키워드를 입력하세요. 예: 에어컨필터, 자동차에어컨필터")
-        return
-
-    # 결과 캐시 확인 — 같은 키워드면 API 재호출 없이 즉시 표시
-    _cached = st.session_state.get(_TEAMP_RESULTS_KEY)
-    if _cached is not None and _cached["products"] == products:
+        if _cached is not None:
+            products = _cached["products"]
+            rows = _cached["rows"]
+            failed_items = _cached["failed_items"]
+        else:
+            st.info("사이드바에 제품 키워드를 입력하세요. 예: 에어컨필터, 자동차에어컨필터")
+            return
+    elif _cached is not None and _cached["products"] == products:
         rows = _cached["rows"]
         failed_items = _cached["failed_items"]
     else:
