@@ -296,3 +296,21 @@ NAVER_BLOG_SEARCH_RECENT_DISPLAY = 100  # 최신성 조회 시 가져올 결과 
 TEAMP_RECENT_HOT  = 100   # 상한(NAVER_BLOG_SEARCH_RECENT_DISPLAY)과 동일
 TEAMP_RECENT_BUSY = 30
 TEAMP_RECENT_GOOD = 6
+
+# ── 조견표(구글시트) 키워드 소스 ─────────────────────────────────────────────
+# 조견표 차종 × 제품으로 체험단 키워드를 직접 생성(연관어로 못 잡는 신차 발굴).
+# 시트 ID 는 비밀이 아니나(접근은 서비스계정 공유로 통제) Public repo 노출 최소화 위해
+# 코드에 박지 않고 st.secrets['jogyeonpyo_sheet_id'] 또는 env JOGYEONPYO_SHEET_ID 로 읽는다.
+# 인증 private key 는 절대 코드/깃 금지 — st.secrets['gcp_service_account'] 만(jogyeonpyo.py).
+#
+# ★중간 규모 검증 단계: 전체(에어컨필터 221·와이퍼 452)를 한 번에 풀지 않는다.
+#   먼저 JOGYEONPYO_TEST_LIMIT 개로 429·소요시간을 실측한 뒤 전체 한도를 정한다.
+JOGYEONPYO_TEST_LIMIT = 50          # 조견표 모드 차종 상한(앞 N개). 50으로 검증 후 확대.
+JOGYEONPYO_CACHE_TTL = 21600        # 조견표 차종 읽기 캐시 TTL(초) — 6시간(차종은 자주 안 바뀜).
+# 조견표 제품(탭) ↔ {worksheet: 탭이름, product_kw: 키워드 접미사}.
+# UI 셀렉트박스 라벨 → 실제 탭/제품어 매핑. 와이퍼는 전/후면 탭이 갈리나 검색어는 '와이퍼' 공통.
+JOGYEONPYO_PRODUCTS = {
+    "에어컨필터":       {"worksheet": "에어컨필터",   "product_kw": "에어컨필터"},
+    "와이퍼(전면)":     {"worksheet": "와이퍼_전면",  "product_kw": "와이퍼"},
+    "와이퍼(후면)":     {"worksheet": "와이퍼_후면",  "product_kw": "와이퍼"},
+}

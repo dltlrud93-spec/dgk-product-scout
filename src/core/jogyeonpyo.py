@@ -25,9 +25,9 @@ from __future__ import annotations
 import json as _json
 import os
 import re
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
-import gspread
+# gspread 는 실제 시트 읽기에서만 필요 → 지연 import(정규화·키워드생성만 쓰는 경로는 의존 없음).
 
 # ── 설정 (시트 식별자는 비밀이 아님 — secrets/env/상수 순으로 읽되 하드코딩 기본값 비움) ──
 #   인증 private key 와 달리 스프레드시트 ID 는 식별자라 secrets 강제는 아니지만,
@@ -50,7 +50,7 @@ class JogyeonpyoConfigError(RuntimeError):
 
 # ── 인증 (주문가공기 core/sheet_io._authorize 와 동일 패턴) ──────────────────
 
-def _authorize(creds_path_or_dict: Union[str, dict, None] = None) -> gspread.Client:
+def _authorize(creds_path_or_dict: Union[str, dict, None] = None) -> "gspread.Client":
     """service account 인증 후 gspread 클라이언트 반환.
 
     우선순위(주문가공기와 동일):
@@ -60,6 +60,8 @@ def _authorize(creds_path_or_dict: Union[str, dict, None] = None) -> gspread.Cli
       4. str 경로 전달
       5. 로컬 폴백 파일(주문가공기 service_account.json)
     """
+    import gspread  # noqa: PLC0415 (지연 import — 시트 읽기 경로에서만 필요)
+
     # 1·2: Streamlit Cloud secrets
     try:
         import streamlit as st  # noqa: PLC0415
@@ -215,3 +217,73 @@ def read_car_models(
     ss = open_jogyeonpyo(creds, sheet_id)
     ws = ss.worksheet(worksheet)
     return extract_models(ws.get_all_values(), car_col_header, limit)
+
+
+# ── 차종 → 키워드 검색량 조회 + 수확(체험단 키워드 단위 형식) ──────────────────
+
+def keyword_volume(adapter, keyword: str) -> int:
+    """생성 키워드의 검색량 = 그 키워드 자체 행(monthlyPc+Mobile).
+
+    검색광고 키워드도구에 keyword(공백 없는 단일 토큰)를 hint 로 던져, 응답 중
+    relKeyword 가 keyword 와 (정규화 기준) 같은 행의 검색량을 반환. 매칭 행 없으면 0
+    (= 아직 검색 수요 미형성. 신차는 0일 수 있음). adapter._request_keywordstool 의
+    429 백오프/서명은 그대로 사용. API 오류는 호출자에게 전파(부분 실패 격리는 상위에서).
+    """
+    from src.core.car_models import normalize_text       # noqa: PLC0415
+    from src.core.search_volume import member_volume      # noqa: PLC0415
+
+    rows = adapter._request_keywordstool([keyword])
+    target = normalize_text(keyword)   # 공백 제거 + 대문자화 (네이버 relKeyword 정규화와 동일)
+    for row in rows:
+        if normalize_text(str(row.get("relKeyword", ""))) == target:
+            return member_volume(row)
+    return 0
+
+
+def harvest_jogyeonpyo_kw_items(
+    adapter,
+    models: list[str],
+    product: str,
+    *,
+    on_progress: Optional[Callable[[int, int], None]] = None,
+    rate_limit_seconds: Optional[float] = None,
+) -> tuple[list[tuple[str, str, int]], list[str]]:
+    """조견표 차종 목록 × 제품 → 체험단 키워드 단위 (keyword, car_model, volume) 리스트.
+
+    · keyword     = build_keyword(차종, product)  (공백 없는 단일 토큰)
+    · car_model   = 원본 차종명(표시 전용)
+    · volume      = keyword_volume(adapter, keyword)  (검색량 0 키워드는 제외 — 기존 체험단 규약)
+    검색량 조회는 차종마다 1회 호출(시드당 1회 규약 동일) + 호출 간 rate limit sleep.
+    차종별 예외(429 소진 등)는 격리해 failed 에 모으고 나머지는 계속(부분 실패 허용).
+
+    반환: (items[검색량 내림차순], failed_models). 검색량 0 은 items 에서 제외(failed 아님).
+    """
+    rl = adapter.rate_limit_seconds if rate_limit_seconds is None else rate_limit_seconds
+    items: list[tuple[str, str, int]] = []
+    failed: list[str] = []
+    total = len(models)
+    did_call = False
+    for i, m in enumerate(models):
+        kw = build_keyword(m, product)
+        if not kw:
+            if on_progress:
+                on_progress(i + 1, total)
+            continue
+        if did_call:
+            adapter._sleep(rl)   # 호출 간 rate limit (첫 호출 전엔 sleep 안 함)
+        try:
+            vol = keyword_volume(adapter, kw)
+            did_call = True
+        except Exception:  # noqa: BLE001  (429 소진 등 — 차종 단위 격리)
+            did_call = True
+            failed.append(m)
+            if on_progress:
+                on_progress(i + 1, total)
+            continue
+        if vol > 0:
+            items.append((kw, m, vol))
+        if on_progress:
+            on_progress(i + 1, total)
+
+    items.sort(key=lambda x: x[2], reverse=True)
+    return items, failed

@@ -26,11 +26,15 @@ from datetime import date, datetime, timedelta, timezone
 
 import streamlit as st
 
+_DOTENV_SNAPSHOT: dict[str, str] = {}
 try:
     # .env 의 네이버 API 키를 환경변수로 로드(없어도 무시 — 키 검증은 어댑터가 명시 처리).
-    from dotenv import load_dotenv
+    from dotenv import dotenv_values, load_dotenv
 
     load_dotenv()
+    # ★ .env 원본값 스냅샷(권위 출처). st.secrets 접근이 os.environ 을 플레이스홀더로
+    #   덮어써도(1단계 함정), 이 스냅샷의 '진짜' 키로 항상 복구하기 위함.
+    _DOTENV_SNAPSHOT = {k: v for k, v in dotenv_values().items() if v}
 except ImportError:
     pass
 
@@ -55,6 +59,10 @@ from src.core.teamp_mode import (
     top_gold_kw_rows,
     top_gold_kw_rows_by_ratio,
 )
+from src.core.jogyeonpyo import (
+    harvest_jogyeonpyo_kw_items,
+    read_car_models,
+)
 from src.core.search_volume import (
     FIELD_COMP_IDX,
     FIELD_MONTHLY_MOBILE,
@@ -62,50 +70,61 @@ from src.core.search_volume import (
     dedupe_relkeywords,
     member_volume,
 )
+from src.core.secrets_util import resolve_secret
 
 st.set_page_config(page_title="dgk-product-scout", layout="wide")
 
 
-def _load_secrets_to_env() -> None:
-    """Streamlit Cloud Secrets → os.environ 브리지.
+_NAVER_ENV_KEYS = (
+    "NAVER_AD_API_KEY",
+    "NAVER_AD_SECRET_KEY",
+    "NAVER_AD_CUSTOMER_ID",
+    "NAVER_CLIENT_ID",
+    "NAVER_CLIENT_SECRET",
+)
 
-    Streamlit Cloud 에서는 secrets.toml 키가 st.secrets 에 들어오지만
-    코드베이스 곳곳의 os.environ.get(...)은 그걸 보지 못한다.
-    앱 시작 시 한 번 호출해 두 공간을 동기화한다.
-    로컬(secrets.toml 없음 / 키 없음)이면 조용히 건너뜀.
 
-    ★TOML 섹션 주의: 네이버 키는 [auth] 섹션 '위'에 위치해야 최상위 키로 읽힌다.
-      섹션 헤더 이후의 키는 해당 섹션에 속하므로 st.secrets["NAVER_AD_API_KEY"]가 아닌
-      st.secrets["auth"]["NAVER_AD_API_KEY"]가 된다.
-      이 함수는 올바른 위치(최상위)를 먼저 시도하고, 실수로 [auth] 아래 넣은 경우도 복구한다.
+def _secret_candidates(key: str) -> list:
+    """네이버 키 1개의 후보값을 '우선순위 순서'로 모은다(진짜값 우선 채택용).
+
+    순서: ① .env 원본 스냅샷(권위) → ② st.secrets 최상위 → ③ st.secrets["auth"] →
+          ④ 현재 os.environ. resolve_secret 이 플레이스홀더를 건너뛰고 첫 진짜값을 고른다.
     """
-    _NAVER_ENV_KEYS = (
-        "NAVER_AD_API_KEY",
-        "NAVER_AD_SECRET_KEY",
-        "NAVER_AD_CUSTOMER_ID",
-        "NAVER_CLIENT_ID",
-        "NAVER_CLIENT_SECRET",
-    )
+    cands: list = [_DOTENV_SNAPSHOT.get(key)]
     try:
-        for key in _NAVER_ENV_KEYS:
-            if os.environ.get(key):
-                continue
-            val = None
-            # 1순위: 최상위(올바른 위치 — TOML에서 [auth] 위에 선언된 키)
+        cands.append(st.secrets[key])
+    except (KeyError, AttributeError, FileNotFoundError):
+        pass
+    try:
+        cands.append(st.secrets["auth"][key])
+    except (KeyError, AttributeError, FileNotFoundError):
+        pass
+    cands.append(os.environ.get(key))
+    return cands
+
+
+def _ensure_naver_env() -> None:
+    """네이버 키를 '진짜값'으로 os.environ 에 재확정(플레이스홀더 덮어쓰기 방지).
+
+    ★1단계 함정 대응: st.secrets 접근 시 Streamlit 이 로컬 secrets.toml 의 플레이스홀더
+      네이버 키를 os.environ 에 export 해 .env 진짜 키를 덮어쓴다. 조견표 읽기가
+      st.secrets 를 건드리므로, 네이버 호출 직전 이 함수로 진짜값을 다시 박는다(idempotent).
+    조견표 인증(gcp_service_account)은 jogyeonpyo.py 가 st.secrets 에서만 읽어 분리됨 — 충돌 없음.
+    """
+    for key in _NAVER_ENV_KEYS:
+        real = resolve_secret(_secret_candidates(key))
+        if real:
+            os.environ[key] = real
+        elif key in os.environ and not _DOTENV_SNAPSHOT.get(key):
+            # 진짜값이 어디에도 없는데 환경엔 플레이스홀더만 있는 경우 → 제거(명확한 키 오류 유도).
             try:
-                val = st.secrets[key]
+                del os.environ[key]
             except KeyError:
                 pass
-            # 2순위: [auth] 아래(TOML 순서 실수로 [auth] 뒤에 넣었을 때 복구)
-            if not val:
-                try:
-                    val = st.secrets["auth"][key]
-                except (KeyError, AttributeError):
-                    pass
-            if val:
-                os.environ[key] = str(val)
-    except Exception:  # noqa: BLE001
-        pass
+
+
+# 구버전 호출부 호환 별칭.
+_load_secrets_to_env = _ensure_naver_env
 
 
 def _password_gate() -> bool:
@@ -136,6 +155,9 @@ def _password_gate() -> bool:
 _load_secrets_to_env()
 if not _password_gate():
     st.stop()
+# 게이트가 st.secrets["auth"] 에 접근하며 os.environ 을 플레이스홀더로 오염시킬 수 있어
+# 인증 통과 직후 네이버 키를 진짜값으로 재확정한다(모든 화면 공통 보호).
+_ensure_naver_env()
 
 
 # ── UI 헬퍼 ──────────────────────────────────────────────────────────────────
@@ -971,6 +993,30 @@ def _harvest_teamp_kw(products: tuple[str, ...]) -> list[tuple[str, str, int]]:
     return harvest_teamp_kw_items(adapter, list(products), idx)
 
 
+def _jogyeonpyo_sheet_id() -> str | None:
+    """조견표 시트 ID — st.secrets['jogyeonpyo_sheet_id'] → env. Public repo 노출 회피로 코드 비박음."""
+    try:
+        if "jogyeonpyo_sheet_id" in st.secrets:
+            return str(st.secrets["jogyeonpyo_sheet_id"])
+    except (KeyError, AttributeError, FileNotFoundError):
+        pass
+    return os.environ.get("JOGYEONPYO_SHEET_ID") or _DOTENV_SNAPSHOT.get("JOGYEONPYO_SHEET_ID")
+
+
+@st.cache_data(ttl=config.JOGYEONPYO_CACHE_TTL, show_spinner="조견표 차종 읽는 중 (구글시트)...")
+def _read_jogyeonpyo_models(worksheet: str, limit: int) -> list[str]:
+    """조견표 차종 목록 읽기(캐시). 같은 (worksheet, limit) 재요청 시 시트 재조회 없이 캐시 히트.
+
+    ★캐시 대상은 '시트 읽기'(차종 목록)만 — 검색량/문서수는 매번 진행바와 함께 라이브 조회.
+    sheet_id 는 _jogyeonpyo_sheet_id() 가 secrets/env 에서 읽어 cache 키에 영향 없음(동일 시트).
+    """
+    return read_car_models(
+        worksheet=worksheet,
+        sheet_id=_jogyeonpyo_sheet_id(),
+        limit=limit,
+    )
+
+
 def render_teamp() -> None:
     _inject_css()
 
@@ -982,12 +1028,41 @@ def render_teamp() -> None:
 
     st.title("체험단 타겟 선정")
     st.caption(
-        "제품 키워드 → 연관 키워드 수확 → 키워드별 검색량 × 블로그 문서수 → 비율 분류. "
+        "키워드 소스(연관어 수확 / 조견표 차종 / 둘 다) → 키워드별 검색량 × 블로그 문서수 → 비율 분류. "
         "비율 낮은 키워드가 체험단 공략 후보입니다."
     )
 
-    # 사이드바: 제품 키워드 입력 + 정렬
-    st.sidebar.markdown("**제품 키워드**")
+    # 사이드바: 키워드 소스 선택
+    st.sidebar.markdown("**키워드 소스**")
+    source_label = st.sidebar.radio(
+        "키워드 소스",
+        ["연관어 수확", "조견표 차종", "둘 다"],
+        key="teamp_source",
+        label_visibility="collapsed",
+        help=(
+            "연관어 수확: 제품 키워드 → 네이버 연관 키워드(현재 방식). "
+            "조견표 차종: 조견표 차종 × 제품으로 직접 생성(연관어로 못 잡는 신차 발굴). "
+            "둘 다: 두 소스를 합쳐 키워드 중복 제거."
+        ),
+    )
+    use_assoc = source_label in ("연관어 수확", "둘 다")
+    use_jp = source_label in ("조견표 차종", "둘 다")
+
+    jp_limit = int(os.environ.get("JOGYEONPYO_TEST_LIMIT") or config.JOGYEONPYO_TEST_LIMIT)
+    jp_product_label = None
+    jp_conf = None
+    if use_jp:
+        jp_product_label = st.sidebar.selectbox(
+            "조견표 제품(탭)",
+            list(config.JOGYEONPYO_PRODUCTS),
+            key="teamp_jp_product",
+            help="조견표 탭 선택 — 그 탭의 차종 × 이 제품으로 키워드를 만듭니다.",
+        )
+        jp_conf = config.JOGYEONPYO_PRODUCTS[jp_product_label]
+        st.sidebar.caption(f"⚠️ 검증 단계 — 조견표 차종 앞 {jp_limit}개만 (전체 아님).")
+
+    # 사이드바: 제품 키워드 입력(연관어/둘다에서 사용) + 정렬
+    st.sidebar.markdown("**제품 키워드**" + ("" if use_assoc else " (조견표 모드에선 미사용)"))
     product_text = st.sidebar.text_area(
         "쉼표 또는 줄바꿈 구분",
         key="teamp_products",
@@ -1022,8 +1097,9 @@ def render_teamp() -> None:
     col_btn, col_note = st.columns([1, 4])
     with col_btn:
         if st.button("🔄 새로고침", key="teamp_refresh",
-                     help="캐시를 비우고 검색광고+블로그 API를 다시 호출합니다."):
+                     help="캐시를 비우고 검색광고+블로그+조견표를 다시 호출합니다."):
             _harvest_teamp_kw.clear()
+            _read_jogyeonpyo_models.clear()
             st.session_state.pop(_TEAMP_RESULTS_KEY, None)
             for k in [k for k in st.session_state if k.startswith("_teamp_blog_")]:
                 del st.session_state[k]
@@ -1037,20 +1113,35 @@ def render_teamp() -> None:
     with st.expander("블로그 문서수 주의 · 한계", expanded=False):
         st.markdown(_TEAMP_LIMITS_MD)
 
-    # products=[] 이면서 캐시가 살아있으면 → 탭 복귀 케이스, 캐시에서 복원
-    if not products:
+    # 요청 식별 서명 — 소스/제품키워드/조견표제품/상한이 같으면 세션 캐시 재사용(탭 전환 무재추출).
+    signature = (
+        source_label,
+        tuple(products) if use_assoc else (),
+        jp_product_label or "",
+        jp_limit if use_jp else 0,
+    )
+    valid_request = (use_assoc and bool(products)) or use_jp
+    jp_failed: list[str] = []
+
+    if not valid_request:
+        # 입력 없음 — 캐시 있으면 탭 복귀로 보고 복원, 없으면 안내
         if _cached is not None:
-            products = _cached["products"]
+            products = _cached.get("products", products)
             rows = _cached["rows"]
             failed_items = _cached["failed_items"]
+            jp_failed = _cached.get("jp_failed", [])
         else:
-            st.info("사이드바에 제품 키워드를 입력하세요. 예: 에어컨필터, 자동차에어컨필터")
+            st.info("사이드바에서 키워드 소스를 고르고, 연관어 모드면 제품 키워드를 입력하세요.")
             return
-    elif _cached is not None and _cached["products"] == products:
+    elif _cached is not None and _cached.get("signature") == signature:
         rows = _cached["rows"]
         failed_items = _cached["failed_items"]
+        jp_failed = _cached.get("jp_failed", [])
     else:
-        # 새로 수집 — 키워드 변경 또는 새로고침 시
+        # 새로 수집 — 소스·키워드·조견표제품 변경 또는 새로고침 시
+        # ★조견표 읽기(st.secrets 접근)가 네이버 키를 플레이스홀더로 오염시킬 수 있어
+        #   네이버 호출 직전마다 _ensure_naver_env() 로 진짜 키를 재확정한다(1단계 함정 대응).
+        _ensure_naver_env()
         cid = os.environ.get("NAVER_CLIENT_ID", "").strip()
         csec = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
         if not (cid and csec):
@@ -1060,14 +1151,68 @@ def render_teamp() -> None:
             )
             return
 
-        try:
-            kw_items = _harvest_teamp_kw(tuple(products))
-        except Exception as e:  # noqa: BLE001
-            st.error(f"키워드 수확 실패: {type(e).__name__}: {e}")
-            return
+        kw_items: list[tuple[str, str, int]] = []
+
+        # ① 연관어 수확
+        if use_assoc and products:
+            try:
+                kw_items += _harvest_teamp_kw(tuple(products))
+            except Exception as e:  # noqa: BLE001
+                st.error(f"연관어 키워드 수확 실패: {type(e).__name__}: {e}")
+                return
+
+        # ② 조견표 차종 × 제품 (검색량 라이브 조회 + 진행바 + 429 실패 집계)
+        if use_jp:
+            try:
+                models = _read_jogyeonpyo_models(jp_conf["worksheet"], jp_limit)
+            except Exception as e:  # noqa: BLE001
+                st.error(
+                    f"조견표 읽기 실패: {type(e).__name__}: {e} — "
+                    "st.secrets['gcp_service_account']·['jogyeonpyo_sheet_id'] 또는 "
+                    "서비스계정 공유를 확인하세요."
+                )
+                return
+            # 조견표 읽기가 st.secrets 를 건드려 네이버 키 오염 가능 → 즉시 재확정.
+            _ensure_naver_env()
+            cid = os.environ.get("NAVER_CLIENT_ID", "").strip()
+            csec = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
+            try:
+                jp_adapter = NaverAdapter([jp_conf["product_kw"]])  # NAVER_AD_* 키 검증
+            except Exception as e:  # noqa: BLE001
+                st.error(f"검색광고 키 오류: {type(e).__name__}: {e}")
+                return
+            total_m = len(models)
+            prog_v = st.progress(0, f"조견표 검색량 조회 중... 0/{total_m} (차종 {total_m}개)")
+
+            def _vcb(done: int, tot: int) -> None:
+                prog_v.progress(done / tot, f"조견표 검색량 조회 중... {done}/{tot}")
+
+            jp_items, jp_failed = harvest_jogyeonpyo_kw_items(
+                jp_adapter, models, jp_conf["product_kw"], on_progress=_vcb,
+            )
+            prog_v.empty()
+            kw_items += jp_items
+
+        # ③ 둘 다: 키워드 기준 중복 제거(연관어·조견표가 같은 키워드 만들면 1개만)
+        if source_label == "둘 다":
+            seen: set[str] = set()
+            deduped: list[tuple[str, str, int]] = []
+            for kw, cm, v in kw_items:
+                if kw in seen:
+                    continue
+                seen.add(kw)
+                deduped.append((kw, cm, v))
+            kw_items = deduped
 
         if not kw_items:
-            st.info("표시할 데이터가 없습니다(제품명 포함 키워드가 없거나 검색량 <10만 있음).")
+            msg = "표시할 데이터가 없습니다(검색량>0 키워드 없음)."
+            if jp_failed:
+                msg += f" 조견표 검색량 실패 {len(jp_failed)}건(429)."
+            st.info(msg)
+            st.session_state[_TEAMP_RESULTS_KEY] = {
+                "signature": signature, "products": products,
+                "rows": [], "failed_items": [], "jp_failed": jp_failed,
+            }
             return
 
         total = len(kw_items)
@@ -1104,12 +1249,16 @@ def render_teamp() -> None:
             prog_r.empty()
 
         st.session_state[_TEAMP_RESULTS_KEY] = {
+            "signature": signature,
             "products": products,
             "rows": rows,
             "failed_items": failed_items,
+            "jp_failed": jp_failed,
         }
 
     if not rows and not failed_items:
+        if jp_failed:
+            st.warning(f"⚠️ 조견표 검색량 {len(jp_failed)}건 조회 실패(429) — 새로고침으로 재시도하세요.")
         st.info("표시할 데이터가 없습니다.")
         return
 
@@ -1132,7 +1281,9 @@ def render_teamp() -> None:
     if recent_queried:
         chip_items.append(("📅 최신성 조회", str(recent_queried)))
     if failed_items:
-        chip_items.append(("⚠️ 조회실패", str(len(failed_items))))
+        chip_items.append(("⚠️ 블로그 실패", str(len(failed_items))))
+    if jp_failed:
+        chip_items.append(("⚠️ 조견표 검색량 실패", str(len(jp_failed))))
     _chips(chip_items)
 
     if top10:
@@ -1164,10 +1315,16 @@ def render_teamp() -> None:
     else:
         shown = sorted(rows, key=lambda r: r.ratio)
 
+    _src_desc = f"소스: {source_label}"
+    if use_jp and jp_product_label:
+        _src_desc += f" · 조견표 제품: {jp_product_label} (앞 {jp_limit}개)"
+    if use_assoc and products:
+        _src_desc += f" · 제품 키워드: {', '.join(products)}"
     st.caption(
         f"{sort_label} · {len(shown)}행"
-        + (f" + 실패 {len(failed_items)}건" if failed_items else "")
-        + f" · 제품 키워드: {', '.join(products)} (열 머리글 클릭 시 정렬)"
+        + (f" + 블로그실패 {len(failed_items)}건" if failed_items else "")
+        + (f" + 조견표검색량실패 {len(jp_failed)}건" if jp_failed else "")
+        + f" · {_src_desc} (열 머리글 클릭 시 정렬)"
     )
 
     # 컬럼 순서: 키워드·검색량·문서수·비율·최근3개월·최근비중·분류 (핵심 7개) | 차종(참고, 우측)
@@ -1204,9 +1361,14 @@ def render_teamp() -> None:
 
     if failed_items:
         st.warning(
-            f"⚠️ {len(failed_items)}건 조회 실패 (429 재시도 소진) — "
+            f"⚠️ 블로그 {len(failed_items)}건 조회 실패 (429 재시도 소진) — "
             "새로고침으로 재시도하거나, 잠시 후 다시 시도하세요: "
             + ", ".join(kw for kw, _, _ in failed_items)
+        )
+    if jp_failed:
+        st.warning(
+            f"⚠️ 조견표 검색량 {len(jp_failed)}건 조회 실패 (429 재시도 소진) — "
+            "새로고침으로 재시도하세요: " + ", ".join(jp_failed)
         )
 
 
