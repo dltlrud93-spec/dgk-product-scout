@@ -467,13 +467,13 @@ def render_car_demand() -> None:
     )
     _highlight_table(
         "📈 추세 상승 · 신규 후보 차종",
-        ["차종", "검색량", "추세"],
+        ["차종", "부품", "검색량", "추세"],
         [
-            [r.canonical, f"{r.volume:,}",
+            [r.canonical, r.part_type, f"{r.volume:,}",
              "신규 후보" if trends[r.canonical].new_candidate else "↑"]
             for r in hl_rows[:8]
         ],
-        align=["left", "right", "center"],
+        align=["left", "left", "right", "center"],
     )
 
     # 뷰 선택 — 터미널의 세 뷰와 동일.
