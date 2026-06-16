@@ -382,6 +382,11 @@ _DEMAND_RESULTS_KEY = "_demand_results"
 _SEASONAL_RESULTS_KEY = "_seasonal_results"
 _TEAMP_RESULTS_KEY = "_teamp_results"
 
+# 체험단 '키워드 소스' 표시 라벨(표시 전용). 분기는 use_assoc/use_jp 플래그로 — 라벨 변경에 안전.
+_SRC_ASSOC = "키워드로 차종 검색"   # 연관어 수확(제품 키워드 시드 → 네이버 연관어)
+_SRC_DATA = "데이터로 차종 검색"    # 조견표 차종 × 제품 직접 생성
+_SRC_HYBRID = "하이브리드 모드"     # 둘 다(연관어 + 조견표 합쳐 중복 제거)
+
 
 def _trend_display(t, low_conf: bool) -> str:
     """추세 표시 전용 포맷(렌더만). 화살표+증감%. 계산/임계값은 Trend(t) 그대로 사용 —
@@ -1028,31 +1033,33 @@ def render_teamp() -> None:
 
     st.title("체험단 타겟 선정")
     st.caption(
-        "키워드 소스(연관어 수확 / 조견표 차종 / 둘 다) → 키워드별 검색량 × 블로그 문서수 → 비율 분류. "
+        f"키워드 소스({_SRC_ASSOC} / {_SRC_DATA} / {_SRC_HYBRID}) → 키워드별 검색량 × 블로그 문서수 → 비율 분류. "
         "비율 낮은 키워드가 체험단 공략 후보입니다."
     )
 
     # 사이드바: 키워드 소스 선택
+    # ★표시 라벨만. 내부 분기는 use_assoc/use_jp 플래그로 — 라벨 문자열 분기 최소화.
     st.sidebar.markdown("**키워드 소스**")
     source_label = st.sidebar.radio(
         "키워드 소스",
-        ["연관어 수확", "조견표 차종", "둘 다"],
+        [_SRC_ASSOC, _SRC_DATA, _SRC_HYBRID],
         key="teamp_source",
         label_visibility="collapsed",
         help=(
-            "연관어 수확: 제품 키워드 → 네이버 연관 키워드(현재 방식). "
-            "조견표 차종: 조견표 차종 × 제품으로 직접 생성(연관어로 못 잡는 신차 발굴). "
-            "둘 다: 두 소스를 합쳐 키워드 중복 제거."
+            f"{_SRC_ASSOC}: 제품 키워드 → 네이버 연관 키워드(현재 방식). "
+            f"{_SRC_DATA}: 조견표 차종 × 제품으로 직접 생성(연관어로 못 잡는 신차 발굴). "
+            f"{_SRC_HYBRID}: 두 소스를 합쳐 키워드 중복 제거."
         ),
     )
-    use_assoc = source_label in ("연관어 수확", "둘 다")
-    use_jp = source_label in ("조견표 차종", "둘 다")
+    use_assoc = source_label in (_SRC_ASSOC, _SRC_HYBRID)   # 연관어 시드 사용 모드
+    use_jp = source_label in (_SRC_DATA, _SRC_HYBRID)       # 조견표 차종 사용 모드
 
     # 차종 상한: env(정수) > config(None=전체). 0/빈값 = 전체.
     _env_lim = os.environ.get("JOGYEONPYO_TEST_LIMIT", "").strip()
     jp_limit = int(_env_lim) if _env_lim.isdigit() and int(_env_lim) > 0 else config.JOGYEONPYO_TEST_LIMIT
     jp_product_label = None
     jp_conf = None
+    # 조견표 제품(탭) 선택 — 데이터/하이브리드 모드에서만 표시(연관어 단독은 불필요).
     if use_jp:
         jp_product_label = st.sidebar.selectbox(
             "조견표 제품(탭)",
@@ -1067,13 +1074,19 @@ def render_teamp() -> None:
         else:
             st.sidebar.caption(f"조견표 **{jp_product_label} 탭 전체** 조회 (느릴 수 있음 · 6시간 캐시).")
 
-    # 사이드바: 제품 키워드 입력(연관어/둘다에서 사용) + 정렬
-    st.sidebar.markdown("**제품 키워드**" + ("" if use_assoc else " (조견표 모드에선 미사용)"))
-    product_text = st.sidebar.text_area(
-        "쉼표 또는 줄바꿈 구분",
-        key="teamp_products",
-        help="예: 에어컨필터, 자동차에어컨필터. 각 키워드를 시드로 연관 키워드를 수확해 경쟁도를 분석합니다.",
-    )
+    # 사이드바: 제품 키워드 입력 — 연관어 시드가 필요한 모드에서만 표시.
+    # (데이터로 차종 검색=조견표 단독 모드에선 시드 불필요 → 입력란 자체를 숨김)
+    if use_assoc:
+        st.sidebar.markdown("**제품 키워드**")
+        if source_label == _SRC_HYBRID:
+            st.sidebar.caption("연관어 수확용 시드 (하이브리드는 연관어도 수확).")
+        product_text = st.sidebar.text_area(
+            "쉼표 또는 줄바꿈 구분",
+            key="teamp_products",
+            help="예: 에어컨필터, 자동차에어컨필터. 각 키워드를 시드로 연관 키워드를 수확해 경쟁도를 분석합니다.",
+        )
+    else:
+        product_text = ""
     st.sidebar.divider()
     st.sidebar.markdown("**정렬**")
     sort_label = st.sidebar.radio(
@@ -1206,8 +1219,8 @@ def render_teamp() -> None:
             prog_v.empty()
             kw_items += jp_items
 
-        # ③ 둘 다: 키워드 기준 중복 제거(연관어·조견표가 같은 키워드 만들면 1개만)
-        if source_label == "둘 다":
+        # ③ 하이브리드: 키워드 기준 중복 제거(연관어·조견표가 같은 키워드 만들면 1개만)
+        if use_assoc and use_jp:
             seen: set[str] = set()
             deduped: list[tuple[str, str, int]] = []
             for kw, cm, v in kw_items:
