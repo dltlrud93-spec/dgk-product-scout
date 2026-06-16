@@ -2,3 +2,6 @@ streamlit>=1.30
 pytest>=8.0
 requests>=2.31
 python-dotenv>=1.0
+# 조견표(구글시트) 읽기 — 주문가공기와 동일 인증(서비스계정)
+gspread>=6.1
+google-auth>=2.29
