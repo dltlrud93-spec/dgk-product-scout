@@ -1008,7 +1008,7 @@ def _jogyeonpyo_sheet_id() -> str | None:
     return os.environ.get("JOGYEONPYO_SHEET_ID") or _DOTENV_SNAPSHOT.get("JOGYEONPYO_SHEET_ID")
 
 
-@st.cache_data(ttl=config.JOGYEONPYO_CACHE_TTL, show_spinner="조견표 차종 읽는 중 (구글시트)...")
+@st.cache_data(ttl=config.JOGYEONPYO_CACHE_TTL, show_spinner="데이터 차종 읽는 중 (구글시트)...")
 def _read_jogyeonpyo_models(worksheet: str, limit: int) -> list[str]:
     """조견표 차종 목록 읽기(캐시). 같은 (worksheet, limit) 재요청 시 시트 재조회 없이 캐시 히트.
 
@@ -1047,7 +1047,7 @@ def render_teamp() -> None:
         label_visibility="collapsed",
         help=(
             f"{_SRC_ASSOC}: 제품 키워드 → 네이버 연관 키워드(현재 방식). "
-            f"{_SRC_DATA}: 조견표 차종 × 제품으로 직접 생성(연관어로 못 잡는 신차 발굴). "
+            f"{_SRC_DATA}: 데이터 차종 × 제품으로 직접 생성(연관어로 못 잡는 신차 발굴). "
             f"{_SRC_HYBRID}: 두 소스를 합쳐 키워드 중복 제거."
         ),
     )
@@ -1062,17 +1062,17 @@ def render_teamp() -> None:
     # 조견표 제품(탭) 선택 — 데이터/하이브리드 모드에서만 표시(연관어 단독은 불필요).
     if use_jp:
         jp_product_label = st.sidebar.selectbox(
-            "조견표 제품(탭)",
+            "데이터 제품",
             list(config.JOGYEONPYO_PRODUCTS),
             key="teamp_jp_product",
-            help="조견표 탭 선택 — 그 탭의 차종 × 이 제품으로 키워드를 만듭니다. "
+            help="데이터 제품 선택 — 그 제품의 차종 × 이 제품으로 키워드를 만듭니다. "
                  "한 번에 한 제품(탭)만 조회합니다(전 제품 동시 조회 없음).",
         )
         jp_conf = config.JOGYEONPYO_PRODUCTS[jp_product_label]
         if jp_limit:
-            st.sidebar.caption(f"조견표 차종 상한 {jp_limit}개 (env JOGYEONPYO_TEST_LIMIT).")
+            st.sidebar.caption(f"데이터 차종 상한 {jp_limit}개 (env JOGYEONPYO_TEST_LIMIT).")
         else:
-            st.sidebar.caption(f"조견표 **{jp_product_label} 탭 전체** 조회 (느릴 수 있음 · 6시간 캐시).")
+            st.sidebar.caption(f"데이터 **{jp_product_label} 전체** 조회 (느릴 수 있음 · 6시간 캐시).")
 
     # 사이드바: 제품 키워드 입력 — 연관어 시드가 필요한 모드에서만 표시.
     # (데이터로 차종 검색=조견표 단독 모드에선 시드 불필요 → 입력란 자체를 숨김)
@@ -1116,7 +1116,7 @@ def render_teamp() -> None:
     col_btn, col_note = st.columns([1, 4])
     with col_btn:
         if st.button("🔄 새로고침", key="teamp_refresh",
-                     help="캐시를 비우고 검색광고+블로그+조견표를 다시 호출합니다."):
+                     help="캐시를 비우고 검색광고+블로그+데이터를 다시 호출합니다."):
             _harvest_teamp_kw.clear()
             _read_jogyeonpyo_models.clear()
             st.session_state.pop(_TEAMP_RESULTS_KEY, None)
@@ -1186,7 +1186,7 @@ def render_teamp() -> None:
                 models = _read_jogyeonpyo_models(jp_conf["worksheet"], jp_limit)
             except Exception as e:  # noqa: BLE001
                 st.error(
-                    f"조견표 읽기 실패: {type(e).__name__}: {e} — "
+                    f"데이터 읽기 실패: {type(e).__name__}: {e} — "
                     "st.secrets['gcp_service_account']·['jogyeonpyo_sheet_id'] 또는 "
                     "서비스계정 공유를 확인하세요."
                 )
@@ -1203,15 +1203,15 @@ def render_teamp() -> None:
             total_m = len(models)
             est_min = total_m * config.JOGYEONPYO_SECONDS_PER_MODEL / 60
             st.info(
-                f"📊 조견표 **{jp_product_label}** {total_m}개 차종 조회 — "
+                f"📊 데이터 **{jp_product_label}** {total_m}개 차종 조회 — "
                 f"약 **{est_min:.1f}분** 소요 예상(차종당 ~{config.JOGYEONPYO_SECONDS_PER_MODEL}초). "
                 "진행 중 다른 탭 이동 가능, 결과는 6시간 캐시됩니다. "
                 "검색량 0 차종은 블로그 조회 전 자동 제외(시간 단축)."
             )
-            prog_v = st.progress(0, f"조견표 검색량 조회 중... 0/{total_m} (차종 {total_m}개)")
+            prog_v = st.progress(0, f"데이터 검색량 조회 중... 0/{total_m} (차종 {total_m}개)")
 
             def _vcb(done: int, tot: int) -> None:
-                prog_v.progress(done / tot, f"조견표 검색량 조회 중... {done}/{tot} 차종")
+                prog_v.progress(done / tot, f"데이터 검색량 조회 중... {done}/{tot} 차종")
 
             jp_items, jp_failed = harvest_jogyeonpyo_kw_items(
                 jp_adapter, models, jp_conf["product_kw"], on_progress=_vcb,
@@ -1233,7 +1233,7 @@ def render_teamp() -> None:
         if not kw_items:
             msg = "표시할 데이터가 없습니다(검색량>0 키워드 없음)."
             if jp_failed:
-                msg += f" 조견표 검색량 실패 {len(jp_failed)}건(429)."
+                msg += f" 데이터 검색량 실패 {len(jp_failed)}건(429)."
             st.info(msg)
             st.session_state[_TEAMP_RESULTS_KEY] = {
                 "signature": signature, "products": products,
@@ -1284,7 +1284,7 @@ def render_teamp() -> None:
 
     if not rows and not failed_items:
         if jp_failed:
-            st.warning(f"⚠️ 조견표 검색량 {len(jp_failed)}건 조회 실패(429) — 새로고침으로 재시도하세요.")
+            st.warning(f"⚠️ 데이터 검색량 {len(jp_failed)}건 조회 실패(429) — 새로고침으로 재시도하세요.")
         st.info("표시할 데이터가 없습니다.")
         return
 
@@ -1309,7 +1309,7 @@ def render_teamp() -> None:
     if failed_items:
         chip_items.append(("⚠️ 블로그 실패", str(len(failed_items))))
     if jp_failed:
-        chip_items.append(("⚠️ 조견표 검색량 실패", str(len(jp_failed))))
+        chip_items.append(("⚠️ 데이터 검색량 실패", str(len(jp_failed))))
     _chips(chip_items)
 
     if top10:
@@ -1343,13 +1343,13 @@ def render_teamp() -> None:
 
     _src_desc = f"소스: {source_label}"
     if use_jp and jp_product_label:
-        _src_desc += f" · 조견표 제품: {jp_product_label} (앞 {jp_limit}개)"
+        _src_desc += f" · 데이터 제품: {jp_product_label} (앞 {jp_limit}개)"
     if use_assoc and products:
         _src_desc += f" · 제품 키워드: {', '.join(products)}"
     st.caption(
         f"{sort_label} · {len(shown)}행"
         + (f" + 블로그실패 {len(failed_items)}건" if failed_items else "")
-        + (f" + 조견표검색량실패 {len(jp_failed)}건" if jp_failed else "")
+        + (f" + 데이터검색량실패 {len(jp_failed)}건" if jp_failed else "")
         + f" · {_src_desc} (열 머리글 클릭 시 정렬)"
     )
 
@@ -1393,7 +1393,7 @@ def render_teamp() -> None:
         )
     if jp_failed:
         st.warning(
-            f"⚠️ 조견표 검색량 {len(jp_failed)}건 조회 실패 (429 재시도 소진) — "
+            f"⚠️ 데이터 검색량 {len(jp_failed)}건 조회 실패 (429 재시도 소진) — "
             "새로고침으로 재시도하세요: " + ", ".join(jp_failed)
         )
 

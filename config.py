@@ -311,9 +311,11 @@ JOGYEONPYO_TEST_LIMIT = None        # None = 전체. env 로 정수 캡 가능.
 JOGYEONPYO_SECONDS_PER_MODEL = 0.5  # 차종당 검색량 조회 예상 시간(예상시간 안내·UX용). rate limit 기준.
 JOGYEONPYO_CACHE_TTL = 21600        # 조견표 차종 읽기 캐시 TTL(초) — 6시간(차종은 자주 안 바뀜).
 # 조견표 제품(탭) ↔ {worksheet: 탭이름, product_kw: 키워드 접미사}.
-# UI 셀렉트박스 라벨 → 실제 탭/제품어 매핑. 와이퍼는 전/후면 탭이 갈리나 검색어는 '와이퍼' 공통.
+# UI 셀렉트박스 라벨 → 실제 탭/제품어 매핑.
+# 와이퍼: 후면 탭(와이퍼_후면)은 차종이 전면(452)에 사실상 모두 포함(단종 6종만 후면 전용)
+#   + '차종' 헤더 없이 SRB 품번 컬럼이라 키워드 생성에 부적합 → 선택지에서 제외.
+#   따라서 '와이퍼' = 와이퍼_전면 데이터 하나로 통합(전/후면 구분 없음).
 JOGYEONPYO_PRODUCTS = {
-    "에어컨필터":       {"worksheet": "에어컨필터",   "product_kw": "에어컨필터"},
-    "와이퍼(전면)":     {"worksheet": "와이퍼_전면",  "product_kw": "와이퍼"},
-    "와이퍼(후면)":     {"worksheet": "와이퍼_후면",  "product_kw": "와이퍼"},
+    "에어컨필터":   {"worksheet": "에어컨필터",   "product_kw": "에어컨필터"},
+    "와이퍼":       {"worksheet": "와이퍼_전면",  "product_kw": "와이퍼"},
 }
