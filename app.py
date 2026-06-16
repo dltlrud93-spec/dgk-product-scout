@@ -1048,7 +1048,9 @@ def render_teamp() -> None:
     use_assoc = source_label in ("연관어 수확", "둘 다")
     use_jp = source_label in ("조견표 차종", "둘 다")
 
-    jp_limit = int(os.environ.get("JOGYEONPYO_TEST_LIMIT") or config.JOGYEONPYO_TEST_LIMIT)
+    # 차종 상한: env(정수) > config(None=전체). 0/빈값 = 전체.
+    _env_lim = os.environ.get("JOGYEONPYO_TEST_LIMIT", "").strip()
+    jp_limit = int(_env_lim) if _env_lim.isdigit() and int(_env_lim) > 0 else config.JOGYEONPYO_TEST_LIMIT
     jp_product_label = None
     jp_conf = None
     if use_jp:
@@ -1056,10 +1058,14 @@ def render_teamp() -> None:
             "조견표 제품(탭)",
             list(config.JOGYEONPYO_PRODUCTS),
             key="teamp_jp_product",
-            help="조견표 탭 선택 — 그 탭의 차종 × 이 제품으로 키워드를 만듭니다.",
+            help="조견표 탭 선택 — 그 탭의 차종 × 이 제품으로 키워드를 만듭니다. "
+                 "한 번에 한 제품(탭)만 조회합니다(전 제품 동시 조회 없음).",
         )
         jp_conf = config.JOGYEONPYO_PRODUCTS[jp_product_label]
-        st.sidebar.caption(f"⚠️ 검증 단계 — 조견표 차종 앞 {jp_limit}개만 (전체 아님).")
+        if jp_limit:
+            st.sidebar.caption(f"조견표 차종 상한 {jp_limit}개 (env JOGYEONPYO_TEST_LIMIT).")
+        else:
+            st.sidebar.caption(f"조견표 **{jp_product_label} 탭 전체** 조회 (느릴 수 있음 · 6시간 캐시).")
 
     # 사이드바: 제품 키워드 입력(연관어/둘다에서 사용) + 정렬
     st.sidebar.markdown("**제품 키워드**" + ("" if use_assoc else " (조견표 모드에선 미사용)"))
@@ -1182,10 +1188,17 @@ def render_teamp() -> None:
                 st.error(f"검색광고 키 오류: {type(e).__name__}: {e}")
                 return
             total_m = len(models)
+            est_min = total_m * config.JOGYEONPYO_SECONDS_PER_MODEL / 60
+            st.info(
+                f"📊 조견표 **{jp_product_label}** {total_m}개 차종 조회 — "
+                f"약 **{est_min:.1f}분** 소요 예상(차종당 ~{config.JOGYEONPYO_SECONDS_PER_MODEL}초). "
+                "진행 중 다른 탭 이동 가능, 결과는 6시간 캐시됩니다. "
+                "검색량 0 차종은 블로그 조회 전 자동 제외(시간 단축)."
+            )
             prog_v = st.progress(0, f"조견표 검색량 조회 중... 0/{total_m} (차종 {total_m}개)")
 
             def _vcb(done: int, tot: int) -> None:
-                prog_v.progress(done / tot, f"조견표 검색량 조회 중... {done}/{tot}")
+                prog_v.progress(done / tot, f"조견표 검색량 조회 중... {done}/{tot} 차종")
 
             jp_items, jp_failed = harvest_jogyeonpyo_kw_items(
                 jp_adapter, models, jp_conf["product_kw"], on_progress=_vcb,

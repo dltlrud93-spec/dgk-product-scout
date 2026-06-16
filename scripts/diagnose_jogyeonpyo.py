@@ -50,34 +50,43 @@ from src.core.teamp_mode import (
     fetch_teamp_kw_rows_partial,
 )
 
-PRODUCT = "에어컨필터"
-WORKSHEET = "에어컨필터"
-# 신차 포함 확인용(꼬리물기로 못 잡던 차종). 50개 밖이면 별도로 덧붙여 '잡히는지'만 확인.
+# 신차 포함 확인용(꼬리물기로 못 잡던 차종). 대상 밖이면 별도로 덧붙여 '잡히는지'만 확인.
 NEWCAR_TOKENS = ["콜레오스", "액티언", "토레스", "그랑콜레오스"]
 
 
 def main() -> None:
     sheet_id = sys.argv[1] if len(sys.argv) > 1 else None
-    limit = int(sys.argv[2]) if len(sys.argv) > 2 else config.JOGYEONPYO_TEST_LIMIT
+    if len(sys.argv) > 2 and sys.argv[2].isdigit():
+        limit = int(sys.argv[2])
+    else:
+        limit = config.JOGYEONPYO_TEST_LIMIT   # None = 전체
+    limit_desc = f"앞 {limit}개" if limit else "탭 전체"
+
+    WORKSHEET = sys.argv[3] if len(sys.argv) > 3 else "에어컨필터"
+    PRODUCT = next(
+        (c["product_kw"] for c in config.JOGYEONPYO_PRODUCTS.values()
+         if c["worksheet"] == WORKSHEET),
+        WORKSHEET,
+    )
 
     print("=" * 72)
-    print(f"조견표 모드 검증 — {WORKSHEET} 탭, 상한 {limit}개 (config.JOGYEONPYO_TEST_LIMIT)")
+    print(f"조견표 모드 검증 — {WORKSHEET} 탭 (제품 '{PRODUCT}'), {limit_desc}")
     print("=" * 72)
 
     # ① 조견표 읽기 (캐시 대상과 동일 경로)
     all_models = read_car_models(worksheet=WORKSHEET, sheet_id=sheet_id)
     models = read_car_models(worksheet=WORKSHEET, sheet_id=sheet_id, limit=limit)
-    print(f"[①] 차종 총 {len(all_models)}개 → 검증 대상 앞 {len(models)}개")
+    print(f"[①] 차종 총 {len(all_models)}개 → 검증 대상 {limit_desc} {len(models)}개")
 
-    # 신차가 앞 limit 안에 있나? 없으면 별도 덧붙여 '잡히는지'만 추가 확인.
+    # 신차가 대상 안에 있나? 없으면 별도 덧붙여 '잡히는지'만 추가 확인.
     def _is_newcar(name: str) -> bool:
         return any(tok in normalize_car_keyword(name) for tok in NEWCAR_TOKENS)
 
     in_batch = [m for m in models if _is_newcar(m)]
     extra_new = [m for m in all_models if _is_newcar(m) and m not in models]
-    print(f"     앞 {limit}개 중 신차: {in_batch or '없음'}")
+    print(f"     대상 중 신차: {in_batch or '없음'}")
     if extra_new:
-        print(f"     (참고) {limit}개 밖 신차 {extra_new} → 별도 덧붙여 잡히는지 확인")
+        print(f"     (참고) 대상 밖 신차 {extra_new} → 별도 덧붙여 잡히는지 확인")
 
     targets = models + extra_new
 
@@ -132,14 +141,20 @@ def main() -> None:
         print(f"  ... (상위 30개만 표시, 총 {len(rows)}개)")
 
     newcar_hit = [r.keyword for r in rows if r.keyword in newcar_keys]
+    gold = sum(1 for r in rows if r.grade == "🟡 황금")
+    okk = sum(1 for r in rows if r.grade == "🟢 해볼만")
+    sat = sum(1 for r in rows if r.grade == "🔴 포화/후순위")
+    gold_kws = [r.keyword for r in rows if r.grade == "🟡 황금"]
 
     print("\n" + "=" * 72)
     print("결과 요약")
-    print(f"  · 차종 {len(all_models)}개 중 검증 {len(targets)}개 (상한 {limit} + 신차덧붙임 {len(extra_new)})")
+    print(f"  · 차종 {len(all_models)}개 중 검증 {len(targets)}개 ({limit_desc} + 신차덧붙임 {len(extra_new)})")
     print(f"  · 검색량 조회: {t_vol:.1f}s, 검색량>0 {len(kw_items)}개, 429 {len(jp_failed)}건")
     print(f"  · 블로그 조회: {t_blog:.1f}s, 성공 {len(rows)}개, 실패 {len(blog_failed)}건(429 {blog_429['n']})")
-    print(f"  · 총 소요: {t_vol + t_blog:.1f}s")
+    print(f"  · 총 소요: {t_vol + t_blog:.1f}s ({(t_vol + t_blog)/60:.1f}분)")
     print(f"  · 총 429: {len(jp_failed) + blog_429['n']}건")
+    print(f"  · 등급: 🟡황금 {gold} / 🟢해볼만 {okk} / 🔴포화 {sat}")
+    print(f"  · 황금 키워드: {gold_kws}")
     print(f"  · 신차 잡힘: {newcar_hit or '(검색량 미형성으로 제외됐을 수 있음)'}")
     print("=" * 72)
 

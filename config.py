@@ -303,9 +303,12 @@ TEAMP_RECENT_GOOD = 6
 # 코드에 박지 않고 st.secrets['jogyeonpyo_sheet_id'] 또는 env JOGYEONPYO_SHEET_ID 로 읽는다.
 # 인증 private key 는 절대 코드/깃 금지 — st.secrets['gcp_service_account'] 만(jogyeonpyo.py).
 #
-# ★중간 규모 검증 단계: 전체(에어컨필터 221·와이퍼 452)를 한 번에 풀지 않는다.
-#   먼저 JOGYEONPYO_TEST_LIMIT 개로 429·소요시간을 실측한 뒤 전체 한도를 정한다.
-JOGYEONPYO_TEST_LIMIT = 50          # 조견표 모드 차종 상한(앞 N개). 50으로 검증 후 확대.
+# 전체 해제(50개 실측 429 0건 — 한도 문제 없음, 시간만 제약: 차종당 ~0.5s 순차).
+#   기본 None = 탭 전체 조회(에어컨필터 221 ≈ 3.7분 / 와이퍼_전면 452 ≈ 7.5분).
+#   env JOGYEONPYO_TEST_LIMIT 에 정수를 주면 그 수로 캡(디버깅·빠른 점검용). 0/빈값=전체.
+#   ★제품(탭)별로 한 번에 하나만 조회 — 전 제품 동시 조회는 막아 시간 폭증 방지.
+JOGYEONPYO_TEST_LIMIT = None        # None = 전체. env 로 정수 캡 가능.
+JOGYEONPYO_SECONDS_PER_MODEL = 0.5  # 차종당 검색량 조회 예상 시간(예상시간 안내·UX용). rate limit 기준.
 JOGYEONPYO_CACHE_TTL = 21600        # 조견표 차종 읽기 캐시 TTL(초) — 6시간(차종은 자주 안 바뀜).
 # 조견표 제품(탭) ↔ {worksheet: 탭이름, product_kw: 키워드 접미사}.
 # UI 셀렉트박스 라벨 → 실제 탭/제품어 매핑. 와이퍼는 전/후면 탭이 갈리나 검색어는 '와이퍼' 공통.
