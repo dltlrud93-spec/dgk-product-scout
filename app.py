@@ -1730,6 +1730,7 @@ _SCREEN = st.sidebar.radio(
     "화면 선택",
     ["차종 수요", "계절 제품", "키워드 탐색기", "체험단 타겟", "체험단 양식"],
     label_visibility="collapsed",
+    key="_screen_select",
 )
 st.sidebar.divider()
 
