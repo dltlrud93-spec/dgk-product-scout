@@ -1473,7 +1473,8 @@ def render_revu_form() -> None:
     col_q, col_n = st.columns(2)
     with col_q:
         provide_qty = st.text_input(
-            "제공수량", key="revu_qty", help='예: "EV5 전용 에어컨필터 P17"')
+            "제공수량 (예: EV5 에어컨필터 P17 2개)", key="revu_qty",
+            help="제품 스펙 + 수량 단위(\"2개\" 등)까지 직접 입력하세요. 양식에 그대로 들어갑니다.")
     with col_n:
         recruit_count = st.number_input(
             "모집인원", min_value=1, max_value=999, value=10, step=1, key="revu_recruit")
@@ -1547,7 +1548,7 @@ def render_revu_form() -> None:
         ("캠페인 부제목", campaign_subtitle or "—"),
         ("차종", car_model or "(없음)"),
         ("제품명", product_name or "—"),
-        ("제공수량", (f"{provide_qty} 개" if provide_qty else "—")),
+        ("제공수량", provide_qty or "—"),
         ("모집인원", f"{int(recruit_count)}명"),
         ("제목키워드", title_keywords or "—"),
         ("본문키워드", body_keywords or "—"),

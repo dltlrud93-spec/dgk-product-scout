@@ -76,7 +76,7 @@ def test_values_land_in_correct_cells():
         campaign_title="EV5 에어컨필터",
         campaign_subtitle="여름철 차량 공기질 관리",
         product_name="파이널 에어컨필터",
-        provide_qty="EV5 전용 P17",
+        provide_qty="EV5 전용 P17 2개",
         recruit_count=15,
         title_keywords="에어컨필터교체",
         body_keywords="캐빈필터, 활성탄필터",
@@ -92,11 +92,21 @@ def test_values_land_in_correct_cells():
     assert _cell(doc, 5, 0) == "[ 여름철 차량 공기질 관리 ]"
     assert _cell(doc, 6, 0) == "15명"
     assert "제품명: 파이널 에어컨필터" in _cell(doc, 7, 0)
-    assert "제공수량: EV5 전용 P17 개" in _cell(doc, 7, 0)
+    assert "제공수량: EV5 전용 P17 2개" in _cell(doc, 7, 0)
     assert _cell(doc, 8, 1) == "1. 미션1\n2. 미션2\n3. 미션3"
     assert "제목키워드 (1~3개) : 에어컨필터교체" in _cell(doc, 10, 1)
     assert "본문키워드 (3~5개) : 캐빈필터, 활성탄필터" in _cell(doc, 10, 1)
     assert _cell(doc, 11, 0) == "링크입력: https://brand.naver.com/dgk/products/1"
+
+
+def test_provide_qty_no_duplicate_gae():
+    """제공수량은 입력값에 단위("2개")까지 포함 → 원본 "개"가 또 붙어 "...2개 개"가
+    되면 안 된다(입력값 그대로, 끝이 "2개")."""
+    doc = _build(provide_qty="EV5 에어컨필터 P17 2개")
+    line = [p for p in _cell(doc, 7, 0).split("\n") if p.startswith("제공수량")][0]
+    assert line == "제공수량: EV5 에어컨필터 P17 2개"
+    assert "2개 개" not in line
+    assert "개 개" not in _cell(doc, 7, 0)
 
 
 def test_clip_missions_route_to_clip_row():
