@@ -32,7 +32,10 @@ import pathlib
 import re
 from dataclasses import dataclass, field
 
-from docx import Document
+# ★python-docx(docx)는 docx 생성 시점에만 필요하므로 ★지연 import 한다(build_revu_docx 내부).
+#   모듈 최상단에서 import 하면 배포본에 python-docx 가 없을 때 이 모듈 전체가 import 불가가 되어,
+#   find_banned_words·merge_keywords·추적URL 검증 등 순수 함수와 앱 전체(app.py line 76)가
+#   함께 죽는다. 지연 import 로 docx 미설치 시에도 양식 외 기능은 정상 동작한다.
 
 # 템플릿 경로(프로젝트 루트 기준).
 TEMPLATE_PATH = pathlib.Path(__file__).resolve().parent.parent / "templates" / "revu_basic_template.docx"
@@ -278,6 +281,13 @@ def fill_document(doc, data: RevuFormData) -> None:
 
 def build_revu_docx(data: RevuFormData, template_path=None) -> bytes:
     """빈 양식을 로드 → 값 채움 → docx 바이트 반환(st.download_button 용)."""
+    try:
+        from docx import Document  # ★지연 import — docx 생성 시점에만 python-docx 필요.
+    except ImportError as e:
+        raise ImportError(
+            "python-docx 가 설치돼 있지 않아 docx 를 생성할 수 없습니다. "
+            "`pip install python-docx` (requirements.txt 에 python-docx>=1.1 포함)."
+        ) from e
     path = pathlib.Path(template_path) if template_path else TEMPLATE_PATH
     if not path.exists():
         raise FileNotFoundError(

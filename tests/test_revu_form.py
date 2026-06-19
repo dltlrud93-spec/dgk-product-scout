@@ -10,6 +10,9 @@ test_revu_form.py — 레뷰 체험단 양식 docx 생성 회귀 테스트.
 from __future__ import annotations
 
 import io
+import subprocess
+import sys
+import textwrap
 
 import pytest
 from docx import Document
@@ -320,3 +323,66 @@ def test_merge_keywords_dedupes():
 
 def test_merge_keywords_no_additions_keeps_existing():
     assert merge_keywords("a, b", []) == "a, b"
+
+
+# ── 배포본 회귀: python-docx 없어도 모듈 import·순수함수 동작 ────────────────
+
+def test_revu_form_imports_without_python_docx():
+    """★배포본 ImportError 회귀: python-docx 가 없어도 src.revu_form import 와
+    순수 함수(merge_keywords/find_banned_words)는 동작해야 한다.
+
+    docx 를 import 차단한 서브프로세스에서 검증 — 최상단 docx import 가 재도입되면
+    이 테스트가 깨진다(app.py line 76 'from src.revu_form import' 동반 사망 방지)."""
+    code = textwrap.dedent(
+        """
+        import builtins
+        _real = builtins.__import__
+        def _blocked(name, *a, **k):
+            if name == "docx" or name.startswith("docx."):
+                raise ModuleNotFoundError("No module named 'docx'")
+            return _real(name, *a, **k)
+        builtins.__import__ = _blocked
+
+        from src.revu_form import merge_keywords, find_banned_words, assemble_tracking_url
+        assert merge_keywords("a", ["b", "a"]) == "a, b"
+        assert "비염" in find_banned_words("비염 완화")
+        url, errors = assemble_tracking_url("https://x/p", "naver.blog", "social")
+        assert url and not errors
+        print("OK")
+        """
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, cwd=str(TEMPLATE_PATH.parent.parent),
+    )
+    assert proc.returncode == 0, f"docx 없이 import 실패:\nSTDOUT={proc.stdout}\nSTDERR={proc.stderr}"
+    assert "OK" in proc.stdout
+
+
+def test_build_revu_docx_clear_error_without_python_docx():
+    """python-docx 없을 때 build_revu_docx 는 명확한 ImportError 를 던진다(조용한 실패 금지)."""
+    code = textwrap.dedent(
+        """
+        import builtins
+        _real = builtins.__import__
+        def _blocked(name, *a, **k):
+            if name == "docx" or name.startswith("docx."):
+                raise ModuleNotFoundError("No module named 'docx'")
+            return _real(name, *a, **k)
+        builtins.__import__ = _blocked
+
+        from src.revu_form import build_revu_docx, RevuFormData
+        try:
+            build_revu_docx(RevuFormData(product_name="x"))
+            print("NO_ERROR")
+        except ImportError as e:
+            assert "python-docx" in str(e)
+            print("RAISED")
+        """
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, cwd=str(TEMPLATE_PATH.parent.parent),
+    )
+    assert proc.returncode == 0, f"STDERR={proc.stderr}"
+    assert "RAISED" in proc.stdout
