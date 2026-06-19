@@ -1479,11 +1479,16 @@ def render_revu_form() -> None:
         )
         return
 
-    # ── Step 1. 콘텐츠 타입 ──
-    st.subheader("1. 콘텐츠 타입")
-    content_type = st.radio(
-        "콘텐츠 타입", ["블로그", "클립"], horizontal=True, label_visibility="collapsed",
-    )
+    # ── Step 1. 콘텐츠 타입 · 옵션(드롭다운 위젯 → 선택 텍스트로 양식에 박힘) ──
+    st.subheader("1. 콘텐츠 타입 · 옵션")
+    col_ct, col_pc, col_ug = st.columns(3)
+    with col_ct:
+        content_type = st.radio("콘텐츠 타입", ["블로그", "클립"], key="revu_content_type")
+    with col_pc:
+        purchase_combine = st.radio(
+            "구매평 결합", ["아니오", "예"], key="revu_purchase_combine")
+    with col_ug:
+        urgent = st.radio("긴급 진행", ["아니오", "예"], key="revu_urgent")
 
     # ── Step 2. 캠페인 제목/부제목 (글자수 제한) ──
     st.subheader("2. 캠페인 제목 · 부제목")
@@ -1653,6 +1658,8 @@ def render_revu_form() -> None:
 
     data = RevuFormData(
         content_type=content_type,
+        purchase_combine=purchase_combine,
+        urgent=urgent,
         campaign_title=campaign_title,
         campaign_subtitle=campaign_subtitle,
         car_model=car_model,
@@ -1674,6 +1681,8 @@ def render_revu_form() -> None:
     mission_label = f"{content_type} 미션"
     preview_rows = [
         ("콘텐츠 타입", content_type),
+        ("구매평 결합", purchase_combine),
+        ("긴급 진행", urgent),
         ("캠페인 제목", campaign_title or "—"),
         ("캠페인 부제목", campaign_subtitle or "—"),
         ("차종", car_model or "(없음)"),

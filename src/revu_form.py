@@ -149,6 +149,8 @@ ABSOLUTE_WORDS = ["최고", "최상", "최저가", "유일", "100%", "완벽", "
 class RevuFormData:
     """레뷰 양식 입력값. 비어 있는 값은 양식의 빈칸 그대로 둔다."""
     content_type: str = "블로그"          # "블로그" | "클립"
+    purchase_combine: str = "아니오"       # 구매평 결합 "예" | "아니오"
+    urgent: str = "아니오"                 # 긴급 진행 "예" | "아니오"
     campaign_title: str = ""              # 캠페인 제목(≤20자)
     campaign_subtitle: str = ""           # 캠페인 부제목(≤40자)
     car_model: str = ""                   # 차종(선택)
@@ -225,6 +227,73 @@ def _cell_para(doc, table_idx: int, row_idx: int, para_idx: int):
         return None
 
 
+# Step1 드롭다운(콘텐츠 컨트롤 w:sdt)에 들어갈 선택 표시 텍스트(원본 dropDownList 항목과 동일).
+_CONTENT_LABEL = {
+    "블로그": "① [단독] 블로그 (Blog Only)",
+    "클립": "② [단독] 클립 (Clip Only)",
+}
+_COMBINE_LABEL = {
+    "예": "① 예 (구매평 결합 진행)",
+    "아니오": "② 아니오 (미적용)",
+}
+_URGENT_LABEL = {
+    "예": "① 예 (긴급 진행)",
+    "아니오": "② 아니오 (미적용)",
+}
+
+
+def _unwrap_sdt_with_text(sdt, text: str) -> None:
+    """드롭다운 위젯(w:sdt)을 ★제거하고 선택 텍스트 run 으로 대체한다.
+
+    방식: sdtContent 안의 플레이스홀더("클릭하여 선택") run 텍스트를 선택값으로 바꾼 뒤,
+    sdtContent 의 자식(run·permStart/End 등)을 부모 문단의 sdt 자리로 그대로 옮기고
+    sdt 래퍼를 삭제한다. perm 마커는 짝을 유지(문서 무결성)."""
+    from docx.oxml.ns import qn  # 지연 import — docx 생성 시점에만 필요.
+
+    content = sdt.find(qn("w:sdtContent"))
+    if content is None:
+        return
+    t_elems = content.findall(".//" + qn("w:t"))
+    if t_elems:
+        t_elems[0].text = text          # 플레이스홀더 → 선택값
+        for t in t_elems[1:]:
+            t.text = ""                  # 잔재 제거
+    parent = sdt.getparent()
+    insert_at = parent.index(sdt)
+    for child in list(content):          # sdtContent 자식을 sdt 자리로 이동(순서 보존)
+        parent.insert(insert_at, child)
+        insert_at += 1
+    parent.remove(sdt)                   # 위젯 래퍼 삭제
+
+
+def _fill_step1_dropdowns(doc, data: RevuFormData) -> None:
+    """표0 r1 의 드롭다운 3개(콘텐츠 타입·구매평 결합·긴급 진행)만 텍스트로 치환.
+
+    ★정확히 그 3개만 타겟 — 표0 r1 셀 안의 w:sdt 만 순회하고, 각 sdt 의 listItem 값으로
+    어떤 드롭다운인지 식별한다(다른 셀의 sdt·표12 등은 건드리지 않음)."""
+    from docx.oxml.ns import qn  # 지연 import.
+
+    try:
+        tc = doc.tables[0].rows[1].cells[0]._tc
+    except (IndexError, KeyError):
+        return
+
+    for sdt in tc.findall(".//" + qn("w:sdt")):
+        values = " ".join(
+            (li.get(qn("w:value")) or "") for li in sdt.findall(".//" + qn("w:listItem"))
+        )
+        if "Blog Only" in values or "Clip Only" in values:
+            text = _CONTENT_LABEL.get(data.content_type)
+        elif "구매평 결합 진행" in values:
+            text = _COMBINE_LABEL.get(data.purchase_combine, _COMBINE_LABEL["아니오"])
+        elif "긴급 진행" in values:
+            text = _URGENT_LABEL.get(data.urgent, _URGENT_LABEL["아니오"])
+        else:
+            continue  # 식별 불가 sdt 는 안전하게 건너뜀(치환하지 않음).
+        if text:
+            _unwrap_sdt_with_text(sdt, text)
+
+
 def fill_document(doc, data: RevuFormData) -> None:
     """로드된 Document 에 입력값을 채운다(in-place). 표12(사전안내문)는 건드리지 않는다.
 
@@ -235,9 +304,9 @@ def fill_document(doc, data: RevuFormData) -> None:
         if para is not None:
             _set_para_text(para, text)
 
-    # 콘텐츠 타입 — 표0 r1 p0
-    if data.content_type:
-        put(0, 1, 0, f"2. 콘텐츠 타입 선택:  {data.content_type}")
+    # Step1 드롭다운 3개(콘텐츠 타입·구매평 결합·긴급 진행) — 위젯 제거 + 선택 텍스트 치환.
+    # 라벨 run("2. 콘텐츠 타입 선택: " 등)은 그대로 두고, 드롭다운 자리에만 선택값을 박는다.
+    _fill_step1_dropdowns(doc, data)
 
     # 담당자 — 표3 r0 p0~2
     put(3, 0, 0, f"성함: {data.manager_name}")

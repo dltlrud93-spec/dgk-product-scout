@@ -16,6 +16,7 @@ import textwrap
 
 import pytest
 from docx import Document
+from docx.oxml.ns import qn
 
 from src.revu_form import (
     SUBTITLE_MAX,
@@ -47,6 +48,15 @@ def _build(**kw):
 
 def _cell(doc, t, r):
     return doc.tables[t].rows[r].cells[0].text
+
+
+def _all_text(doc):
+    """문서 전체 w:t 텍스트(merge) — sdt 잔재 검사용."""
+    return "".join(t.text or "" for t in doc.element.body.findall(".//" + qn("w:t")))
+
+
+def _n_sdt(doc):
+    return len(doc.element.body.findall(".//" + qn("w:sdt")))
 
 
 # ── 표 구조·사전안내문 보존 ──────────────────────────────────────────────────
@@ -139,6 +149,69 @@ def test_empty_values_leave_blanks():
     assert _cell(doc, 11, 0).strip() == "링크입력:"  # 링크 라벨만
     # 제품명/제공수량 라벨만 남음
     assert "제품명:" in _cell(doc, 7, 0)
+
+
+# ── Step1 드롭다운(w:sdt) 위젯 제거 + 선택 텍스트 치환 ────────────────────────
+
+def test_dropdowns_replaced_with_selected_text_blog():
+    """콘텐츠=블로그·구매평=예·긴급=아니오 → 표0 r1 에 선택 텍스트가 박힌다."""
+    doc = _build(content_type="블로그", purchase_combine="예", urgent="아니오")
+    cell = _cell(doc, 0, 1)
+    assert "① [단독] 블로그 (Blog Only)" in cell
+    assert "① 예 (구매평 결합 진행)" in cell
+    assert "② 아니오 (미적용)" in cell           # 긴급=아니오
+
+
+def test_dropdowns_replaced_with_selected_text_clip():
+    """콘텐츠=클립·구매평=아니오·긴급=예."""
+    doc = _build(content_type="클립", purchase_combine="아니오", urgent="예")
+    cell = _cell(doc, 0, 1)
+    assert "② [단독] 클립 (Clip Only)" in cell
+    assert "① 예 (긴급 진행)" in cell
+    assert "② 아니오 (미적용)" in cell           # 구매평=아니오
+
+
+def test_dropdown_placeholder_residue_removed():
+    """★'클릭하여 선택' 플레이스홀더 잔재가 없어야 한다(3개 드롭다운 모두 치환)."""
+    doc = _build(content_type="블로그", purchase_combine="예", urgent="예")
+    assert "클릭하여 선택" not in _all_text(doc)
+
+
+def test_dropdown_widgets_removed_but_mission_sdt_kept():
+    """표0 드롭다운 3개(w:sdt)는 제거(위젯→텍스트), 미션 셀의 4번째 sdt 는 보존."""
+    orig = Document(str(TEMPLATE_PATH))
+    assert _n_sdt(orig) == 4                       # 원본: 드롭다운3 + 미션1
+    doc = _build(content_type="블로그")
+    assert _n_sdt(doc) == 1                         # 표0 3개 제거, 미션 1개 유지
+    # 미션 sdt 의 안내 플레이스홀더는 그대로 보존
+    assert "클릭하여 항목을 선택하세요" in _all_text(doc)
+
+
+def test_dropdown_replacement_keeps_docx_valid():
+    """치환 후에도 docx 무손상 — zip 정상·document.xml well-formed·perm 마커 짝 유지."""
+    import io as _io
+    import zipfile
+    from lxml import etree
+
+    raw = build_revu_docx(RevuFormData(content_type="클립", purchase_combine="예", urgent="예"))
+    z = zipfile.ZipFile(_io.BytesIO(raw))
+    assert z.testzip() is None                      # zip 손상 없음
+    etree.fromstring(z.read("word/document.xml"))   # XML well-formed(파싱 실패 시 예외)
+
+    doc = Document(_io.BytesIO(raw))
+    body = doc.element.body
+    ps = len(body.findall(".//" + qn("w:permStart")))
+    pe = len(body.findall(".//" + qn("w:permEnd")))
+    assert ps == pe                                 # perm 마커 균형(문서 무결성)
+    assert len(doc.tables) == 13
+    assert len(doc.tables[12].rows) == 29           # 사전안내문 보존
+
+
+def test_dropdown_defaults_are_no():
+    """구매평·긴급 기본값은 '아니오' → 양쪽 다 '② 아니오 (미적용)'."""
+    doc = _build(content_type="블로그")             # purchase_combine·urgent 기본
+    cell = _cell(doc, 0, 1)
+    assert cell.count("② 아니오 (미적용)") == 2
 
 
 # ── 보조 함수 ────────────────────────────────────────────────────────────────
