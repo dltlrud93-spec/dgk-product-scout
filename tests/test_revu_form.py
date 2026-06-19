@@ -10,6 +10,7 @@ test_revu_form.py — 레뷰 체험단 양식 docx 생성 회귀 테스트.
 from __future__ import annotations
 
 import io
+import json
 import subprocess
 import sys
 import textwrap
@@ -19,6 +20,8 @@ from docx import Document
 from docx.oxml.ns import qn
 
 from src.revu_form import (
+    FORM_VERSION,
+    REVU_SAVE_FIELDS,
     SUBTITLE_MAX,
     TEMPLATE_PATH,
     TITLE_MAX,
@@ -27,8 +30,12 @@ from src.revu_form import (
     build_revu_docx,
     build_tracking_url,
     default_mission_lines,
+    deserialize_form,
     find_banned_words,
     merge_keywords,
+    revu_form_defaults,
+    save_filename_json,
+    serialize_form,
     suggest_filename,
 )
 from src.core.keyword_reco import partition_banned, recommend_keywords
@@ -459,3 +466,123 @@ def test_build_revu_docx_clear_error_without_python_docx():
     )
     assert proc.returncode == 0, f"STDERR={proc.stderr}"
     assert "RAISED" in proc.stdout
+
+
+# ── 양식 저장/불러오기(JSON) ─────────────────────────────────────────────────
+
+_SAMPLE_VALUES = {
+    "revu_content_type": "클립",
+    "revu_purchase_combine": "예",
+    "revu_urgent": "예",
+    "revu_title": "EV5 에어컨필터 교체",
+    "revu_subtitle": "여름철 차량 공기질 관리",
+    "revu_car": "EV5",
+    "revu_product": "파이널 에어컨필터",
+    "revu_qty": "EV5 전용 P17 2개",
+    "revu_recruit": 15,
+    "revu_titlekw": "에어컨필터교체",
+    "revu_bodykw": "캐빈필터, 활성탄필터",
+    "revu_url": "https://brand.naver.com/dgk/products/1",
+    "revu_mission_0": "미션1", "revu_mission_1": "미션2", "revu_mission_2": "미션3",
+    "revu_mgr_name": "홍길동", "revu_mgr_phone": "010-0000-0000", "revu_mgr_email": "x@y.com",
+    "revu_track_base": "https://m.site.naver.com/2aAvQ",
+    "revu_nt_source": "naver.blog", "revu_nt_medium": "social",
+    "revu_nt_detail": "revu", "revu_nt_keyword": "EV5에어컨필터",
+}
+
+
+def test_serialize_includes_all_fields_and_version():
+    """저장 JSON 은 form_version + 모든 저장 필드를 포함한다."""
+    js = serialize_form(_SAMPLE_VALUES)
+    data = json.loads(js)
+    assert data["form_version"] == FORM_VERSION
+    for key, _ in REVU_SAVE_FIELDS:
+        assert key in data, f"저장 누락: {key}"
+    assert data["revu_recruit"] == 15
+    assert data["revu_content_type"] == "클립"
+
+
+def test_serialize_missing_value_uses_default():
+    """값이 빠진 위젯은 기본값으로 저장(없는 값 생성 안 함)."""
+    js = serialize_form({"revu_product": "와이퍼"})
+    data = json.loads(js)
+    assert data["revu_product"] == "와이퍼"
+    assert data["revu_content_type"] == "블로그"     # 기본값
+    assert data["revu_recruit"] == 10                # 기본값
+
+
+def test_roundtrip_save_then_load_restores_values():
+    """★왕복: 저장(JSON) → 불러오기 → 모든 값이 정확히 복원."""
+    js = serialize_form(_SAMPLE_VALUES)
+    restored, warnings = deserialize_form(js)
+    assert warnings == []
+    for key, _ in REVU_SAVE_FIELDS:
+        assert restored[key] == _SAMPLE_VALUES[key], f"복원 불일치: {key}"
+
+
+def test_roundtrip_via_bytes():
+    """업로드 파일은 bytes — bytes 입력도 복원돼야 한다."""
+    js = serialize_form(_SAMPLE_VALUES).encode("utf-8")
+    restored, warnings = deserialize_form(js)
+    assert restored["revu_content_type"] == "클립"
+    assert restored["revu_recruit"] == 15
+
+
+def test_deserialize_corrupt_json_does_not_crash():
+    """손상 JSON → 예외 없이 ({}, [에러])."""
+    restored, warnings = deserialize_form("{ not valid json ")
+    assert restored == {}
+    assert warnings and any("JSON" in w for w in warnings)
+
+
+def test_deserialize_non_object_json():
+    """JSON 이지만 객체가 아니면(리스트 등) 안전 처리."""
+    restored, warnings = deserialize_form("[1, 2, 3]")
+    assert restored == {}
+    assert warnings
+
+
+def test_deserialize_missing_fields_keeps_defaults_with_warning():
+    """구버전·부분 파일: 있는 필드만 채우고 없는 필드는 건너뜀(경고)."""
+    js = json.dumps({"form_version": FORM_VERSION, "revu_product": "와이퍼"})
+    restored, warnings = deserialize_form(js)
+    assert restored["revu_product"] == "와이퍼"
+    assert "revu_content_type" not in restored      # 없는 필드는 안 채움(기본값 유지)
+    assert any("일부 필드" in w for w in warnings)
+
+
+def test_deserialize_invalid_radio_value_falls_back():
+    """라디오 허용 밖 값 → 기본값으로 복원(+경고). StreamlitAPIException 예방."""
+    js = json.dumps({"form_version": FORM_VERSION, "revu_content_type": "엉뚱한값"})
+    restored, warnings = deserialize_form(js)
+    assert restored["revu_content_type"] == "블로그"  # 기본값
+    assert any("유효하지 않" in w for w in warnings)
+
+
+def test_deserialize_recruit_clamped_and_coerced():
+    """모집인원: 정수 보정 + 범위(1~999) 클램프(number_input 범위 위반 방지)."""
+    js = json.dumps({"form_version": FORM_VERSION, "revu_recruit": 99999})
+    restored, _ = deserialize_form(js)
+    assert restored["revu_recruit"] == 999
+    js2 = json.dumps({"form_version": FORM_VERSION, "revu_recruit": "abc"})
+    restored2, warnings2 = deserialize_form(js2)
+    assert restored2["revu_recruit"] == 10           # 기본값
+    assert any("모집인원" in w for w in warnings2)
+
+
+def test_deserialize_version_mismatch_warns_but_loads():
+    """버전 불일치 → 경고하되 가능한 필드는 복원."""
+    js = json.dumps({"form_version": 999, "revu_product": "와이퍼"})
+    restored, warnings = deserialize_form(js)
+    assert restored["revu_product"] == "와이퍼"
+    assert any("버전" in w for w in warnings)
+
+
+def test_save_filename_json():
+    assert save_filename_json(_SAMPLE_VALUES) == "양식_파이널에어컨필터_EV5.json"
+    assert save_filename_json({}) == "양식.json"
+
+
+def test_revu_form_defaults_matches_save_fields():
+    d = revu_form_defaults()
+    assert set(d) == {k for k, _ in REVU_SAVE_FIELDS}

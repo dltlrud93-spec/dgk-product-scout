@@ -74,9 +74,6 @@ from src.core.search_volume import (
 )
 from src.core.secrets_util import resolve_secret
 from src.revu_form import (
-    DEFAULT_NT_DETAIL,
-    DEFAULT_NT_MEDIUM,
-    DEFAULT_NT_SOURCE,
     SUBTITLE_MAX,
     TEMPLATE_PATH as REVU_TEMPLATE_PATH,
     TITLE_MAX,
@@ -84,8 +81,12 @@ from src.revu_form import (
     assemble_tracking_url,
     build_revu_docx,
     default_mission_lines,
+    deserialize_form,
     find_banned_words,
     merge_keywords,
+    revu_form_defaults,
+    save_filename_json,
+    serialize_form,
     suggest_filename,
 )
 from src.core.keyword_reco import partition_banned, recommend_keywords
@@ -1421,9 +1422,11 @@ def render_teamp() -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 # ★빈 양식(templates/revu_basic_template.docx)을 원본 로드 후 정해진 셀만 치환한다.
 #   서식·사전안내문(표12)·표 구조는 src.revu_form 이 100% 보존한다(새로 그리지 않음).
-def _char_counter(label: str, value: str, limit: int, key: str) -> str:
-    """글자수 제한 text_input — 초과 시 빨간 경고 + 실시간 카운트."""
-    val = st.text_input(label, value=value, key=key)
+def _char_counter(label: str, limit: int, key: str) -> str:
+    """글자수 제한 text_input — 초과 시 빨간 경고 + 실시간 카운트.
+
+    값은 session_state(key)로 관리 — value= 미사용(불러오기와 충돌 없게)."""
+    val = st.text_input(label, key=key)
     n = len(val)
     if n > limit:
         st.markdown(
@@ -1464,6 +1467,32 @@ def _add_reco_to_field(field_key: str) -> None:
         st.session_state[f"revu_reco_ck::{kw}"] = False
 
 
+def _fill_missions_from_car(car_model: str, product_name: str) -> None:
+    """차종·제품 기반 기본 미션 문구를 미션 칸에 채운다(on_click 콜백 — 덮어씀)."""
+    for i, line in enumerate(default_mission_lines(car_model, product_name)):
+        st.session_state[f"revu_mission_{i}"] = line
+
+
+def _load_revu_form_file() -> None:
+    """업로드 JSON 을 위젯 session_state 로 복원(file_uploader on_change 콜백 — 안전 시점).
+
+    ★콜백은 rerun 의 위젯 생성 전에 돌아 session_state 설정이 안전(StreamlitAPIException 회피).
+    손상·구버전 파일이어도 deserialize_form 이 죽지 않고 가능한 필드만 채운다."""
+    up = st.session_state.get("revu_loader")
+    if up is None:
+        st.session_state["_revu_load_msg"] = None
+        return
+    try:
+        raw = up.getvalue()
+    except Exception:  # noqa: BLE001 — 업로드 객체 read 실패도 경고로만.
+        st.session_state["_revu_load_msg"] = ("error", ["파일을 읽을 수 없습니다."])
+        return
+    values, warns = deserialize_form(raw)
+    for k, v in values.items():
+        st.session_state[k] = v
+    st.session_state["_revu_load_msg"] = (("ok" if values else "error"), warns)
+
+
 def render_revu_form() -> None:
     _inject_css()
     st.title("체험단 양식 — 레뷰 네이버 베이직")
@@ -1478,6 +1507,41 @@ def render_revu_form() -> None:
             "templates/revu_basic_template.docx 파일을 넣어주세요."
         )
         return
+
+    # 위젯 기본값을 session_state 에 1회 주입 — 모든 양식 위젯은 value= 대신 key 로만
+    # 관리한다(불러오기로 session_state 를 설정해도 value= 와 충돌·경고 없이 반영되게).
+    for _k, _v in revu_form_defaults().items():
+        st.session_state.setdefault(_k, _v)
+
+    # ── 양식 저장 / 불러오기 (파일 — ★Streamlit Cloud 영구저장 아님) ──
+    with st.expander("💾 양식 저장 / 📂 불러오기", expanded=False):
+        st.caption(
+            "작성한 값을 JSON 파일로 내려받아 보관하고, 다음에 올리면 그대로 채워집니다. "
+            "앱이 아니라 ★시경 PC에 저장 — 앱 재시작에도 안 날아갑니다."
+        )
+        _cur = {k: st.session_state.get(k, d) for k, d in revu_form_defaults().items()}
+        col_save, col_load = st.columns(2)
+        with col_save:
+            st.download_button(
+                "💾 양식 저장 (JSON 다운로드)",
+                data=serialize_form(_cur).encode("utf-8"),
+                file_name=save_filename_json(_cur),
+                mime="application/json",
+                key="revu_save_btn",
+            )
+        with col_load:
+            st.file_uploader(
+                "📂 양식 불러오기 (JSON 업로드)", type=["json"],
+                key="revu_loader", on_change=_load_revu_form_file)
+        _msg = st.session_state.get("_revu_load_msg")
+        if _msg:
+            _kind, _warns = _msg
+            if _kind == "ok":
+                st.success("✅ 불러왔습니다. 필요한 부분만 수정하세요.")
+            else:
+                st.error("불러오기 실패: " + (" / ".join(_warns) if _warns else "알 수 없는 오류"))
+            for _w in _warns:
+                st.warning("⚠️ " + _w)
 
     # ── Step 1. 콘텐츠 타입 · 옵션(드롭다운 위젯 → 선택 텍스트로 양식에 박힘) ──
     st.subheader("1. 콘텐츠 타입 · 옵션")
@@ -1495,10 +1559,10 @@ def render_revu_form() -> None:
     col_t, col_s = st.columns(2)
     with col_t:
         campaign_title = _char_counter(
-            f"캠페인 제목 (최대 {TITLE_MAX}자)", "", TITLE_MAX, "revu_title")
+            f"캠페인 제목 (최대 {TITLE_MAX}자)", TITLE_MAX, "revu_title")
     with col_s:
         campaign_subtitle = _char_counter(
-            f"캠페인 부제목 (최대 {SUBTITLE_MAX}자)", "", SUBTITLE_MAX, "revu_subtitle")
+            f"캠페인 부제목 (최대 {SUBTITLE_MAX}자)", SUBTITLE_MAX, "revu_subtitle")
 
     # ── Step 3. 제품 정보 ──
     st.subheader("3. 제품 정보")
@@ -1516,7 +1580,7 @@ def render_revu_form() -> None:
             help="제품 스펙 + 수량 단위(\"2개\" 등)까지 직접 입력하세요. 양식에 그대로 들어갑니다.")
     with col_n:
         recruit_count = st.number_input(
-            "모집인원", min_value=1, max_value=999, value=10, step=1, key="revu_recruit")
+            "모집인원", min_value=1, max_value=999, step=1, key="revu_recruit")
 
     # ── Step 4. 키워드 (+ 검색광고 연관키워드 추천) ──
     st.subheader("4. 키워드")
@@ -1597,20 +1661,21 @@ def render_revu_form() -> None:
             help="예: https://m.site.naver.com/2aAvQ 또는 스마트스토어 URL")
         col_s, col_m = st.columns(2)
         with col_s:
-            nt_source = st.text_input(
-                "nt_source (필수)", value=DEFAULT_NT_SOURCE, key="revu_nt_source")
+            nt_source = st.text_input("nt_source (필수)", key="revu_nt_source")
         with col_m:
-            nt_medium = st.text_input(
-                "nt_medium (필수)", value=DEFAULT_NT_MEDIUM, key="revu_nt_medium")
+            nt_medium = st.text_input("nt_medium (필수)", key="revu_nt_medium")
         col_d, col_k = st.columns(2)
         with col_d:
-            nt_detail = st.text_input(
-                "nt_detail (선택)", value=DEFAULT_NT_DETAIL, key="revu_nt_detail")
+            nt_detail = st.text_input("nt_detail (선택)", key="revu_nt_detail")
         with col_k:
-            # 차종이 입력돼 있으면 자동 채움(수정 가능). 키 없이 value 로 차종 변화 반영.
             nt_keyword = st.text_input(
-                "nt_keyword (선택)", value=car_model.strip(),
-                help="제품·차종 (예: EV5에어컨필터). 차종 입력 시 자동 채움 — 한글 허용.")
+                "nt_keyword (선택)", key="revu_nt_keyword",
+                help="제품·차종 (예: EV5에어컨필터). 한글 허용. 비었으면 아래 버튼으로 차종 채움.")
+        if car_model.strip() and not st.session_state.get("revu_nt_keyword"):
+            st.button(
+                "차종을 nt_keyword 로", key="revu_nt_kw_from_car",
+                on_click=lambda: st.session_state.__setitem__(
+                    "revu_nt_keyword", car_model.strip()))
 
         track_url, track_errors = assemble_tracking_url(
             track_base, nt_source, nt_medium, nt_detail, nt_keyword)
@@ -1636,25 +1701,26 @@ def render_revu_form() -> None:
         else:
             st.info("필수값(제품 URL·nt_source·nt_medium)을 채우면 추적 URL이 생성됩니다.")
 
-    # ── Step 6. 미션 (차종 입력 시 기본 문구 자동 채움, 수정 가능) ──
+    # ── Step 6. 미션 (차종 기반 기본 문구 버튼으로 자동 채움, 수정 가능) ──
     st.subheader(f"6. {content_type} 미션 (1·2·3)")
-    defaults = default_mission_lines(car_model, product_name)
     if car_model.strip():
-        st.caption("차종 입력 → 기본 문구 자동 채움. 자유롭게 수정하세요.")
+        st.button(
+            "✨ 차종 기반 미션 자동 채움", key="revu_fill_missions",
+            on_click=_fill_missions_from_car, args=(car_model, product_name),
+            help="차종·제품명으로 기본 미션 문구를 채웁니다(기존 미션을 덮어씀).")
     missions = []
     for i in range(3):
-        missions.append(st.text_input(
-            f"미션 {i + 1}", value=defaults[i], key=f"revu_mission_{i}"))
+        missions.append(st.text_input(f"미션 {i + 1}", key=f"revu_mission_{i}"))
 
     # ── Step 7. 담당자 (기본값 자동 채움, 수정 가능) ──
     st.subheader("7. 담당자 정보")
     col_m1, col_m2, col_m3 = st.columns(3)
     with col_m1:
-        manager_name = st.text_input("성함", value="박민우", key="revu_mgr_name")
+        manager_name = st.text_input("성함", key="revu_mgr_name")
     with col_m2:
-        manager_phone = st.text_input("연락처", value="010-3924-1155", key="revu_mgr_phone")
+        manager_phone = st.text_input("연락처", key="revu_mgr_phone")
     with col_m3:
-        manager_email = st.text_input("이메일", value="dgkorea93@naver.com", key="revu_mgr_email")
+        manager_email = st.text_input("이메일", key="revu_mgr_email")
 
     data = RevuFormData(
         content_type=content_type,

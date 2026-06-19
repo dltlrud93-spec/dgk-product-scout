@@ -28,6 +28,7 @@ revu_form.py — 레뷰(REVU) 네이버 베이직 체험단 양식 docx 생성.
 from __future__ import annotations
 
 import io
+import json
 import pathlib
 import re
 from dataclasses import dataclass, field
@@ -57,6 +58,124 @@ DEFAULT_MANAGER_EMAIL = "dgkorea93@naver.com"
 DEFAULT_NT_SOURCE = "naver.blog"
 DEFAULT_NT_MEDIUM = "social"
 DEFAULT_NT_DETAIL = "revu"
+
+# ── 양식 저장/불러오기(JSON 파일) ────────────────────────────────────────────
+# ★Streamlit Cloud 영구저장 안 씀 — 시경 PC 로의 파일 다운로드/업로드만(앱 재시작 무관).
+# 화면 위젯 key → 기본값. 저장은 이 키들의 session_state 값을 JSON 으로, 불러오기는
+# JSON 을 이 키들의 session_state 로 되돌린다(위젯 key 기반 정확 복원).
+FORM_VERSION = 1
+
+REVU_SAVE_FIELDS: list[tuple[str, object]] = [
+    ("revu_content_type", "블로그"),
+    ("revu_purchase_combine", "아니오"),
+    ("revu_urgent", "아니오"),
+    ("revu_title", ""),
+    ("revu_subtitle", ""),
+    ("revu_car", ""),
+    ("revu_product", ""),
+    ("revu_qty", ""),
+    ("revu_recruit", 10),
+    ("revu_titlekw", ""),
+    ("revu_bodykw", ""),
+    ("revu_url", ""),
+    ("revu_mission_0", ""),
+    ("revu_mission_1", ""),
+    ("revu_mission_2", ""),
+    ("revu_mgr_name", DEFAULT_MANAGER_NAME),
+    ("revu_mgr_phone", DEFAULT_MANAGER_PHONE),
+    ("revu_mgr_email", DEFAULT_MANAGER_EMAIL),
+    ("revu_track_base", ""),
+    ("revu_nt_source", DEFAULT_NT_SOURCE),
+    ("revu_nt_medium", DEFAULT_NT_MEDIUM),
+    ("revu_nt_detail", DEFAULT_NT_DETAIL),
+    ("revu_nt_keyword", ""),
+]
+
+# 라디오 위젯 키 → 허용값. 불러온 값이 허용 밖이면 기본값으로(StreamlitAPIException 방지).
+REVU_RADIO_OPTIONS: dict[str, tuple[str, ...]] = {
+    "revu_content_type": ("블로그", "클립"),
+    "revu_purchase_combine": ("아니오", "예"),
+    "revu_urgent": ("아니오", "예"),
+}
+
+_RECRUIT_MIN, _RECRUIT_MAX = 1, 999
+
+
+def revu_form_defaults() -> dict:
+    """저장 대상 위젯 key → 기본값 dict(세션 초기화·복원 기준)."""
+    return {k: v for k, v in REVU_SAVE_FIELDS}
+
+
+def serialize_form(values: dict) -> str:
+    """위젯 값 dict → JSON 문자열(form_version 포함). 알려진 필드만 저장(잉여 무시)."""
+    payload: dict = {"form_version": FORM_VERSION}
+    for key, default in REVU_SAVE_FIELDS:
+        payload[key] = values.get(key, default)
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def deserialize_form(raw) -> tuple[dict, list[str]]:
+    """JSON(str/bytes) → ({위젯key: 값}, 경고목록). ★손상·구버전이어도 죽지 않는다.
+
+    파싱 실패 → ({}, [에러]). 누락 필드는 채우지 않고(기본값 유지) 경고. 라디오 허용값·
+    모집인원 범위/정수는 보정해 StreamlitAPIException(위젯 값 불일치)을 예방한다."""
+    warnings: list[str] = []
+    if isinstance(raw, (bytes, bytearray)):
+        try:
+            raw = bytes(raw).decode("utf-8")
+        except UnicodeDecodeError:
+            return {}, ["파일을 읽을 수 없습니다(UTF-8 인코딩 아님)."]
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}, ["JSON 형식이 아닙니다(손상되었거나 양식 파일이 아님)."]
+    if not isinstance(data, dict):
+        return {}, ["양식 파일 구조가 아닙니다(JSON 객체가 아님)."]
+
+    ver = data.get("form_version")
+    if ver != FORM_VERSION:
+        warnings.append(
+            f"양식 버전이 다릅니다(파일 {ver!r} ≠ 현재 {FORM_VERSION}). 가능한 필드만 채웁니다."
+        )
+
+    out: dict = {}
+    missing = 0
+    for key, default in REVU_SAVE_FIELDS:
+        if key not in data:
+            missing += 1
+            continue
+        val = data[key]
+        if key == "revu_recruit":
+            try:
+                val = max(_RECRUIT_MIN, min(_RECRUIT_MAX, int(val)))
+            except (ValueError, TypeError):
+                warnings.append("모집인원 값이 올바르지 않아 기본값으로 복원합니다.")
+                val = default
+        elif key in REVU_RADIO_OPTIONS:
+            if val not in REVU_RADIO_OPTIONS[key]:
+                warnings.append(f"{key} 값({val!r})이 유효하지 않아 기본값으로 복원합니다.")
+                val = default
+        else:
+            val = default if val is None else str(val)
+        out[key] = val
+
+    if missing:
+        warnings.append(f"일부 필드가 없어 기본값을 유지합니다({missing}개).")
+    return out, warnings
+
+
+def save_filename_json(values: dict) -> str:
+    """저장 파일명: 양식_{제품명}_{차종}.json (빈 항목 생략, 알아보기 쉽게)."""
+    product = str(values.get("revu_product", "") or "").strip().replace(" ", "")
+    car = str(values.get("revu_car", "") or "").strip().replace(" ", "")
+    parts = ["양식"]
+    if product:
+        parts.append(product)
+    if car:
+        parts.append(car)
+    name = "_".join(parts).replace("/", "_").replace("\\", "_")
+    return f"{name}.json"
+
 
 # 허용 문자 패턴(공백은 별도 메시지로 먼저 잡는다).
 _NT_ASCII_RE = re.compile(r"^[A-Za-z0-9._-]+$")          # source/medium
