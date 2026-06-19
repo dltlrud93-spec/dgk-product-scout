@@ -218,6 +218,68 @@ def fetch_blog_count(
     raise BlogFetchError(f"재시도 소진: {query!r}")  # 실질적 도달 불가(루프 구조상)
 
 
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html(text: str) -> str:
+    """블로그 검색 title 의 <b></b> 강조 태그·HTML 엔티티(&amp; 등)를 제거해 순수 텍스트로."""
+    import html
+
+    return html.unescape(_HTML_TAG_RE.sub("", text or "")).strip()
+
+
+def fetch_blog_titles(
+    query: str,
+    client_id: str,
+    client_secret: str,
+    *,
+    display: int = config.NAVER_BLOG_TITLE_DISPLAY,
+    http_get: Optional[Callable] = None,
+    sleep_fn: Optional[Callable[[float], None]] = None,
+    max_retries: int = config.NAVER_BLOG_MAX_RETRIES,
+    backoff_seconds: float = config.NAVER_BLOG_BACKOFF_SECONDS,
+    call_delay: float = config.NAVER_BLOG_CALL_DELAY,
+) -> list[str]:
+    """네이버 블로그 검색(정확도순, display=N) → 글 제목 리스트(HTML 태그 제거).
+
+    체험단 양식 키워드 추천의 '블로그 제목 기반' 보완용. 검색량 무관하게 실제 글
+    제목을 받아 표현을 확보한다. 429/백오프/재시도는 fetch_blog_count 와 동일 패턴.
+    """
+    _get = http_get if http_get is not None else requests.get
+    _sleep = sleep_fn if sleep_fn is not None else time.sleep
+
+    _sleep(call_delay)
+
+    for attempt in range(max_retries + 1):
+        resp = _get(
+            config.NAVER_BLOG_SEARCH_URL,
+            params={"query": query, "display": display},
+            headers={
+                "X-Naver-Client-Id": client_id,
+                "X-Naver-Client-Secret": client_secret,
+            },
+            timeout=10,
+        )
+        if resp.status_code == 429:
+            if attempt < max_retries:
+                retry_after = resp.headers.get("Retry-After")
+                try:
+                    wait = float(retry_after) if retry_after else backoff_seconds * (2 ** attempt)
+                except ValueError:
+                    wait = backoff_seconds * (2 ** attempt)
+                _sleep(wait)
+                continue
+            raise BlogFetchError(
+                f"429 Too Many Requests — {max_retries}회 재시도 소진: {query!r}"
+            )
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+        titles = [_strip_html(item.get("title", "")) for item in items]
+        return [t for t in titles if t]
+
+    raise BlogFetchError(f"재시도 소진: {query!r}")  # 실질적 도달 불가(루프 구조상)
+
+
 def fetch_teamp_rows_partial(
     valid_items: list[tuple[str, str, int]],
     blog_fn: Callable[[str], int],

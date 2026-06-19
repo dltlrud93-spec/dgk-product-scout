@@ -38,7 +38,12 @@ from src.revu_form import (
     serialize_form,
     suggest_filename,
 )
-from src.core.keyword_reco import partition_banned, recommend_keywords
+from src.core.keyword_reco import (
+    extract_title_keywords,
+    partition_banned,
+    recommend_blog_keywords,
+    recommend_keywords,
+)
 
 pytestmark = pytest.mark.skipif(
     not TEMPLATE_PATH.exists(),
@@ -383,6 +388,141 @@ def test_partition_banned_excludes_disease_keywords():
     assert "비염 완화 필터" in excluded
     assert "탈모 방지" in excluded
     assert all("비염" not in k and "탈모" not in k for k, _ in clean)
+
+
+# ── 블로그 제목 기반 키워드 추천 ─────────────────────────────────────────────
+
+# 실제 블로그 검색 title 모양(<b> 강조 태그·HTML 엔티티 포함). 신차라 연관어는 빈약해도
+# 제목엔 교체·교체방법·냄새·셀프·캐빈필터 같은 실제 표현이 풍부하게 등장한다.
+_FAKE_BLOG_TITLES = [
+    "기아 <b>EV5</b> 에어컨필터 교체 방법 셀프로 간단하게",
+    "EV5 캐빈필터 교체주기 알아봤어요",
+    "전기차 EV5 에어컨필터 냄새 제거 후기",
+    "EV5 에어컨필터 셀프 교체 비용 정리",
+    "EV5 에어컨필터 교체 했어요 (캐빈필터 추천)",
+    "EV5 에어컨필터 교체 후기 &amp; 냄새 잡기",
+]
+
+
+def test_extract_title_keywords_frequency_and_seed_excluded():
+    """제목에서 빈도순 키워드 추출 — 검색어 토큰(EV5·에어컨필터)은 제외, 실제 표현 확보."""
+    kws = extract_title_keywords(_FAKE_BLOG_TITLES, "EV5 에어컨필터")
+    words = [k for k, _ in kws]
+    # 검색어 토큰은 빠진다
+    assert "EV5" not in words and "에어컨필터" not in words
+    # 신차 연관어가 빈약해도 제목에서 실제 키워드가 풍부하게 나온다
+    assert "교체" in words
+    assert "캐빈필터" in words
+    assert "냄새" in words
+    # 빈도순(교체가 가장 많은 제목에 등장) — 내림차순 정렬 확인
+    counts = [c for _, c in kws]
+    assert counts == sorted(counts, reverse=True)
+    kw_map = dict(kws)
+    assert kw_map["교체"] >= kw_map["캐빈필터"]
+
+
+def test_extract_title_keywords_drops_stopwords_short_and_numbers():
+    """불용어(알아봤어요·했어요)·1글자·숫자만 토큰은 제외된다."""
+    titles = ["에어컨필터 교체 알아봤어요 2024 의 A 후기"]
+    kws = extract_title_keywords(titles, "에어컨필터")
+    words = [k for k, _ in kws]
+    assert "알아봤어요" not in words   # 불용어
+    assert "2024" not in words          # 숫자만
+    assert "A" not in words and "의" not in words  # 1글자
+    assert "교체" in words and "후기" in words
+
+
+def test_extract_title_keywords_excludes_seed_compact_form():
+    """검색어를 띄어 입력해도 블로그가 붙여 쓴 결합형(EV5에어컨필터)은 제외된다."""
+    titles = ["EV5에어컨필터 교체 후기", "EV5에어컨필터 냄새"]
+    words = [k for k, _ in extract_title_keywords(titles, "EV5 에어컨필터")]
+    assert "EV5에어컨필터" not in words   # 검색어 결합형 = 노이즈, 제외
+    assert "교체" in words and "냄새" in words
+
+
+def test_extract_title_keywords_counts_per_title_once():
+    """같은 단어가 한 제목에 여러 번 나와도 제목 단위 1회만 센다(스팸 과대평가 방지)."""
+    titles = ["교체 교체 교체 에어컨필터", "교체 에어컨필터"]
+    kws = dict(extract_title_keywords(titles, "에어컨필터"))
+    assert kws["교체"] == 2   # 제목 2개에 등장 → 2 (총 4회가 아님)
+
+
+def test_recommend_blog_keywords_with_injected_titles():
+    """titles 직접 주입(fetch_blog_titles 가 이미 HTML 정제한 형태) → 키워드 추출 +
+    원문 제목 그대로 보존 + 금지어 분리(네트워크 없음)."""
+    clean_titles = [
+        "기아 EV5 에어컨필터 교체 방법 셀프로 간단하게",
+        "EV5 캐빈필터 교체주기 알아봤어요",
+        "전기차 EV5 에어컨필터 냄새 제거 후기",
+    ]
+    out = recommend_blog_keywords("EV5 에어컨필터", titles=clean_titles)
+    assert out["titles"] == clean_titles   # 원문 제목 그대로 보존(참고용)
+    words = [k for k, _ in out["keywords"]]
+    assert "교체" in words and "캐빈필터" in words and "냄새" in words
+
+
+def test_recommend_blog_keywords_excludes_banned():
+    """블로그 제목에서 뽑은 키워드 중 금지어(질병명)는 excluded 로 분리."""
+    titles = ["에어컨필터 교체 비염 후기", "에어컨필터 냄새 교체"]
+    out = recommend_blog_keywords("에어컨필터", titles=titles)
+    words = [k for k, _ in out["keywords"]]
+    assert "비염" in out["excluded"]
+    assert "비염" not in words
+    assert "교체" in words
+
+
+def test_recommend_blog_keywords_empty_seed():
+    """빈 검색어 → 빈 결과(네트워크 호출 없음)."""
+    out = recommend_blog_keywords("", titles=_FAKE_BLOG_TITLES)
+    assert out == {"keywords": [], "titles": [], "excluded": []}
+
+
+def test_recommend_blog_keywords_uses_titles_fn_when_no_titles():
+    """titles 미지정 → titles_fn(seed) 으로 가져온다(라이브 경로 대역)."""
+    captured = {}
+
+    def _fake_titles_fn(seed):
+        captured["seed"] = seed
+        return ["에어컨필터 교체 후기", "에어컨필터 냄새 제거"]
+
+    out = recommend_blog_keywords("에어컨필터", titles_fn=_fake_titles_fn)
+    assert captured["seed"] == "에어컨필터"
+    assert "교체" in [k for k, _ in out["keywords"]]
+
+
+def test_recommend_blog_keywords_propagates_fetch_error():
+    """블로그 호출 실패는 예외로 전파 → 호출부(app)가 경고만 띄우고 연관어는 살린다."""
+    def _boom(seed):
+        raise RuntimeError("429 Too Many Requests")
+
+    with pytest.raises(RuntimeError):
+        recommend_blog_keywords("에어컨필터", titles_fn=_boom)
+
+
+# ── 블로그 제목 수집(HTML 정제) ──────────────────────────────────────────────
+
+def test_fetch_blog_titles_strips_html_and_skips_empty():
+    """fetch_blog_titles: <b> 태그·엔티티 제거, 빈 제목 스킵(http_get 주입)."""
+    from src.core.teamp_mode import fetch_blog_titles
+
+    class _Resp:
+        status_code = 200
+        headers: dict = {}
+
+        def json(self):
+            return {"items": [
+                {"title": "EV5 <b>에어컨필터</b> 교체 &amp; 후기"},
+                {"title": ""},   # 빈 제목 → 스킵
+                {"title": "캐빈필터 교체주기"},
+            ]}
+
+        def raise_for_status(self):
+            pass
+
+    titles = fetch_blog_titles(
+        "EV5 에어컨필터", "cid", "csec",
+        http_get=lambda *a, **k: _Resp(), sleep_fn=lambda s: None)
+    assert titles == ["EV5 에어컨필터 교체 & 후기", "캐빈필터 교체주기"]
 
 
 # ── 키워드 칸 덧붙이기(merge) ────────────────────────────────────────────────

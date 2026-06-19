@@ -79,6 +79,45 @@ def test_render_revu_form_toggle_options_no_exception():
     assert len(at.get("download_button")) >= 1
 
 
+# ── 키워드 추천(검색광고 연관어 + 블로그 제목) 실제 렌더 경로 ───────────────────
+
+def test_render_keyword_reco_sections_present():
+    """🔍 키워드 추천 패널에 검색광고·블로그 두 섹션 라벨이 렌더된다(무예외)."""
+    at = _open_revu_form()
+    assert not at.exception
+    blob = " ".join(m.value for m in at.markdown)
+    assert "검색광고 연관키워드" in blob
+    assert "블로그 제목 기반 키워드" in blob
+
+
+def test_render_blog_reco_results_no_exception():
+    """블로그 추천 결과(키워드+원문 제목)를 주입해 렌더 — 체크박스·제목 expander 무예외."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "체험단 양식"
+    at.session_state["revu_blog_reco"] = {
+        "keywords": [("교체", 5), ("캐빈필터", 3), ("냄새", 2)],
+        "titles": ["EV5 에어컨필터 교체 후기", "EV5 캐빈필터 교체주기"],
+        "excluded": [],
+    }
+    at.run()
+    assert not at.exception, f"블로그 추천 결과 렌더 예외: {at.exception}"
+    cks = {c.label for c in at.checkbox}
+    assert any("교체" in lbl for lbl in cks)
+
+
+def test_render_blog_reco_failure_only_warns_no_exception():
+    """블로그 추천 실패(error) 주입 — 경고만 뜨고 화면·양식은 그대로(무예외)."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "체험단 양식"
+    at.session_state["revu_blog_reco"] = {"error": "RuntimeError: 429 Too Many Requests"}
+    at.run()
+    assert not at.exception, f"블로그 실패 렌더 예외: {at.exception}"
+    # 블로그 실패해도 docx 다운로드 버튼은 그대로(양식 동작 유지)
+    assert len(at.get("download_button")) >= 1
+
+
 # ── 저장/불러오기 실제 렌더 경로 ─────────────────────────────────────────────
 
 def test_render_has_save_and_docx_download_buttons():

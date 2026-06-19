@@ -52,6 +52,7 @@ from src.core.car_demand import harvest_models, model_member_keywords, rank_mode
 from src.core.car_models import load_car_models
 from src.core.teamp_mode import (
     fetch_blog_count,
+    fetch_blog_titles,
     fetch_recent_blog_count,
     fetch_recent_3m_docs_partial,
     fetch_teamp_kw_rows_partial,
@@ -89,7 +90,11 @@ from src.revu_form import (
     serialize_form,
     suggest_filename,
 )
-from src.core.keyword_reco import partition_banned, recommend_keywords
+from src.core.keyword_reco import (
+    partition_banned,
+    recommend_blog_keywords,
+    recommend_keywords,
+)
 
 st.set_page_config(page_title="dgk-product-scout", layout="wide")
 
@@ -1467,6 +1472,38 @@ def _add_reco_to_field(field_key: str) -> None:
         st.session_state[f"revu_reco_ck::{kw}"] = False
 
 
+# 블로그 제목 기반 키워드 추천: 같은 검색어 재호출 방지(1시간 캐시).
+@st.cache_data(ttl=3600, show_spinner="블로그 글 제목 수집 중...")
+def _load_blog_reco(seed: str) -> dict:
+    """검색어 → 블로그 글 제목 수집 → 빈도 기반 키워드 추출(금지어 제외).
+
+    반환 recommend_blog_keywords 결과({keywords, titles, excluded}). 키 미설정·429 등
+    실패는 예외로 전파(호출부에서 경고만 — 검색광고 연관어는 그대로 살린다)."""
+    _ensure_naver_env()   # st.secrets 접근으로 오염된 네이버 키 재확정(1단계 함정 대응)
+    cid = os.environ.get("NAVER_CLIENT_ID", "").strip()
+    csec = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
+    if not (cid and csec):
+        raise RuntimeError(
+            "NAVER_CLIENT_ID/SECRET 미설정 — 블로그 제목 추천을 쓰려면 .env 에 추가하세요."
+        )
+    return recommend_blog_keywords(
+        seed, titles_fn=lambda q: fetch_blog_titles(q, cid, csec))
+
+
+def _add_blog_reco_to_field(field_key: str) -> None:
+    """체크된 블로그 제목 키워드를 제목/본문 키워드 칸에 ★덧붙인다(on_click 콜백).
+
+    검색광고 연관어와 동일하게 merge_keywords 로 중복 제거. 적용 후 체크박스 해제."""
+    reco = st.session_state.get("revu_blog_reco", {}).get("keywords", [])
+    selected = [kw for kw, _ in reco if st.session_state.get(f"revu_blog_ck::{kw}")]
+    if not selected:
+        return
+    st.session_state[field_key] = merge_keywords(
+        st.session_state.get(field_key, ""), selected)
+    for kw, _ in reco:
+        st.session_state[f"revu_blog_ck::{kw}"] = False
+
+
 def _fill_missions_from_car(car_model: str, product_name: str) -> None:
     """차종·제품 기반 기본 미션 문구를 미션 칸에 채운다(on_click 콜백 — 덮어씀)."""
     for i, line in enumerate(default_mission_lines(car_model, product_name)):
@@ -1585,11 +1622,11 @@ def render_revu_form() -> None:
     # ── Step 4. 키워드 (+ 검색광고 연관키워드 추천) ──
     st.subheader("4. 키워드")
 
-    with st.expander("🔍 키워드 추천 (검색광고 연관키워드 + 검색량)", expanded=False):
+    with st.expander("🔍 키워드 추천 (검색광고 연관어 + 블로그 제목)", expanded=False):
         st.caption(
-            "차종·제품 기반 연관 키워드와 월검색량(PC+모바일)을 가져옵니다. "
-            "체크 → 제목/본문 키워드 칸에 덧붙이기(중복 자동 제거). "
-            "제목키워드 3개·본문키워드 5개까지 권장."
+            "차종·제품 기반 ①검색광고 연관키워드(월검색량)와 ②블로그 글 제목 기반 키워드를 "
+            "함께 가져옵니다. 신차(예: EV5)는 연관어가 빈약해 블로그 제목으로 보완합니다. "
+            "체크 → 제목/본문 키워드 칸에 덧붙이기(중복 자동 제거). 제목 3개·본문 5개까지 권장."
         )
         # 차종·제품명이 있으면 "{차종} {제품}" 기본값 자동 채움(수정 가능).
         _reco_default = " ".join(p for p in (car_model.strip(), product_name.strip()) if p)
@@ -1597,14 +1634,24 @@ def render_revu_form() -> None:
             "추천 받을 검색어", value=_reco_default, key="revu_reco_seed",
             help='예: "EV5 에어컨필터". 차종·제품 입력 시 자동 채움.')
         if st.button("추천 받기", key="revu_reco_btn"):
-            if reco_seed.strip():
+            _seed = reco_seed.strip()
+            if _seed:
+                # ① 검색광고 연관어(현행) — 실패해도 ②블로그를 막지 않게 독립 try.
                 try:
-                    st.session_state["revu_reco"] = _load_reco_keywords(reco_seed.strip())
+                    st.session_state["revu_reco"] = _load_reco_keywords(_seed)
                 except Exception as e:  # noqa: BLE001 — 원인 명시(429/키 미설정 등)
-                    st.error(f"키워드 추천 실패: {type(e).__name__}: {e}")
+                    st.error(f"검색광고 연관어 추천 실패: {type(e).__name__}: {e}")
+                # ② 블로그 제목 기반(신규) — 실패 시 ★경고만(연관어는 그대로 살림).
+                try:
+                    st.session_state["revu_blog_reco"] = _load_blog_reco(_seed)
+                except Exception as e:  # noqa: BLE001
+                    st.session_state["revu_blog_reco"] = {
+                        "error": f"{type(e).__name__}: {e}"}
             else:
                 st.warning("검색어를 입력하세요.")
 
+        # ── ① 검색광고 연관키워드(현행) ──
+        st.markdown("**🔎 검색광고 연관키워드**")
         _reco = st.session_state.get("revu_reco", {})
         _clean = _reco.get("clean", [])
         _excluded = _reco.get("excluded", [])
@@ -1626,7 +1673,45 @@ def render_revu_form() -> None:
             if _excluded:
                 st.caption("⚠️ 금지어 의심으로 제외됨: " + ", ".join(_excluded))
         elif "revu_reco" in st.session_state:
-            st.info("연관 키워드가 없습니다(검색량 0이거나 결과 없음). 다른 검색어로 시도하세요.")
+            st.info("연관 키워드가 없습니다(검색량 0이거나 결과 없음). 신차라면 아래 블로그 제목을 참고하세요.")
+
+        # ── ② 블로그 제목 기반 키워드(신규) ──
+        st.markdown("**📝 블로그 제목 기반 키워드**")
+        _blog = st.session_state.get("revu_blog_reco", {})
+        if _blog.get("error"):
+            st.warning(
+                "⚠️ 블로그 제목 추천을 가져오지 못했습니다(" + _blog["error"] + "). "
+                "검색광고 연관어는 위에서 그대로 쓸 수 있습니다.")
+        _blog_kws = _blog.get("keywords", [])
+        _blog_titles = _blog.get("titles", [])
+        _blog_excluded = _blog.get("excluded", [])
+        if _blog_kws:
+            _n_bchecked = sum(
+                1 for kw, _ in _blog_kws if st.session_state.get(f"revu_blog_ck::{kw}"))
+            st.caption(
+                f"제목에서 뽑은 키워드 {len(_blog_kws)}개 · 선택 {_n_bchecked}개 "
+                "(괄호 = 등장 제목 수). 형태소분석 없는 빈도 추출이라 노이즈가 있을 수 있어요.")
+            for kw, cnt in _blog_kws:
+                st.checkbox(f"{kw}  (제목 {cnt}개)", key=f"revu_blog_ck::{kw}")
+            col_bt, col_bb = st.columns(2)
+            col_bt.button(
+                "➕ 제목키워드에 추가", key="revu_blog_add_title",
+                on_click=_add_blog_reco_to_field, args=("revu_titlekw",),
+                help="제목키워드는 3개까지 권장.")
+            col_bb.button(
+                "➕ 본문키워드에 추가", key="revu_blog_add_body",
+                on_click=_add_blog_reco_to_field, args=("revu_bodykw",),
+                help="본문키워드는 5개까지 권장.")
+            if _blog_excluded:
+                st.caption("⚠️ 금지어 의심으로 제외됨: " + ", ".join(_blog_excluded))
+        elif "revu_blog_reco" in st.session_state and not _blog.get("error"):
+            st.info("블로그 제목에서 뽑을 키워드가 없습니다(검색 결과 없음).")
+
+        # 실제 블로그 제목 원문 — 시경이 직접 참고(접어서 표시).
+        if _blog_titles:
+            with st.expander(f"📰 이런 블로그 제목들이 있습니다 ({len(_blog_titles)}개)", expanded=False):
+                for t in _blog_titles:
+                    st.markdown(f"- {t}")
 
     col_tk, col_bk = st.columns(2)
     with col_tk:
