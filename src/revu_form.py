@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import io
 import pathlib
+import re
 from dataclasses import dataclass, field
 
 from docx import Document
@@ -44,6 +45,90 @@ SUBTITLE_MAX = 40
 DEFAULT_MANAGER_NAME = "박민우"
 DEFAULT_MANAGER_PHONE = "010-3924-1155"
 DEFAULT_MANAGER_EMAIL = "dgkorea93@naver.com"
+
+# ── 네이버 유입 추적 URL(nt_) 조립 ───────────────────────────────────────────
+# 네이버 공식 규칙:
+#  · nt_source/nt_medium : 영문·숫자·특수문자 3종(-,_,.)만. 한글·공백 금지. 필수.
+#  · nt_detail/nt_keyword: 한글·영문·숫자·특수문자 3종(-,_,.) 허용. 공백 금지. 선택.
+#  · 그 외 특수문자(/,?,&,=,# 등)·공백은 모두 금지.
+DEFAULT_NT_SOURCE = "naver.blog"
+DEFAULT_NT_MEDIUM = "social"
+DEFAULT_NT_DETAIL = "revu"
+
+# 허용 문자 패턴(공백은 별도 메시지로 먼저 잡는다).
+_NT_ASCII_RE = re.compile(r"^[A-Za-z0-9._-]+$")          # source/medium
+_NT_KO_RE = re.compile(r"^[가-힣ㄱ-ㅎㅏ-ㅣA-Za-z0-9._-]+$")  # detail/keyword(한글 허용)
+_HANGUL_RE = re.compile(r"[가-힣ㄱ-ㅎㅏ-ㅣ]")
+
+
+def validate_nt_param(name: str, value: str, *, required: bool, allow_korean: bool) -> str | None:
+    """nt_ 파라미터 1개 검증. 통과면 None, 위반이면 한국어 경고 메시지 반환.
+
+    검사 순서: 필수 누락 → 공백 → 한글(ascii 전용일 때) → 기타 특수문자."""
+    v = value or ""
+    if not v:
+        return f"{name}: 필수값입니다 — 비우면 네이버가 추적하지 못합니다." if required else None
+    if any(ws in v for ws in (" ", "\t", "\n", "　")):
+        return f"{name}: 공백은 사용할 수 없습니다."
+    if not allow_korean and _HANGUL_RE.search(v):
+        return f"{name}: 한글은 사용할 수 없습니다 (영문·숫자·-, _, . 만 가능)."
+    pattern = _NT_KO_RE if allow_korean else _NT_ASCII_RE
+    if not pattern.match(v):
+        return f"{name}: 허용되지 않는 문자가 있습니다 (-, _, . 외 특수문자·공백 금지)."
+    return None
+
+
+def build_tracking_url(
+    product_url: str,
+    nt_source: str,
+    nt_medium: str,
+    nt_detail: str = "",
+    nt_keyword: str = "",
+) -> str:
+    """추적 파라미터를 제품 URL 에 조립(검증 없음 — 순수 조립).
+
+    ★"?" 중복 방지: 제품 URL 에 이미 "?"가 있으면 "&"로, 없으면 "?"로 이어붙인다.
+    선택 파라미터(detail/keyword)는 값이 있을 때만 포함, 필수 2개는 항상 포함."""
+    params = [("nt_source", nt_source), ("nt_medium", nt_medium)]
+    if nt_detail:
+        params.append(("nt_detail", nt_detail))
+    if nt_keyword:
+        params.append(("nt_keyword", nt_keyword))
+    query = "&".join(f"{k}={v}" for k, v in params)
+    sep = "&" if "?" in product_url else "?"
+    return f"{product_url}{sep}{query}"
+
+
+def assemble_tracking_url(
+    product_url: str,
+    nt_source: str,
+    nt_medium: str,
+    nt_detail: str = "",
+    nt_keyword: str = "",
+) -> tuple[str | None, list[str]]:
+    """검증 + 조립. 반환 (url 또는 None, 경고 메시지 목록).
+
+    위반이 하나라도 있으면 url=None(생성 차단) 으로 errors 를 채워 돌려준다."""
+    errors: list[str] = []
+    base = (product_url or "").strip()
+    if not base:
+        errors.append("제품 URL: 필수값입니다.")
+    elif any(ws in base for ws in (" ", "\t", "\n", "　")):
+        errors.append("제품 URL: 공백이 포함되어 있습니다.")
+
+    for name, val, required, allow_ko in (
+        ("nt_source", nt_source, True, False),
+        ("nt_medium", nt_medium, True, False),
+        ("nt_detail", nt_detail, False, True),
+        ("nt_keyword", nt_keyword, False, True),
+    ):
+        err = validate_nt_param(name, val, required=required, allow_korean=allow_ko)
+        if err:
+            errors.append(err)
+
+    if errors:
+        return None, errors
+    return build_tracking_url(base, nt_source, nt_medium, nt_detail, nt_keyword), []
 
 # 가벼운 금지어 목록(완벽한 필터 아님 — 경고용). 질병명 위주.
 # 타브랜드·연예인명은 자동 판별이 어려워 직접 확인하도록 안내만 한다.

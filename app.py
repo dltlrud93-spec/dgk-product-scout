@@ -74,10 +74,14 @@ from src.core.search_volume import (
 )
 from src.core.secrets_util import resolve_secret
 from src.revu_form import (
+    DEFAULT_NT_DETAIL,
+    DEFAULT_NT_MEDIUM,
+    DEFAULT_NT_SOURCE,
     SUBTITLE_MAX,
     TEMPLATE_PATH as REVU_TEMPLATE_PATH,
     TITLE_MAX,
     RevuFormData,
+    assemble_tracking_url,
     build_revu_docx,
     default_mission_lines,
     find_banned_words,
@@ -1430,6 +1434,11 @@ def _char_counter(label: str, value: str, limit: int, key: str) -> str:
     return val
 
 
+def _apply_tracking_url(url: str) -> None:
+    """추적 URL 을 제품링크 칸(revu_url)에 반영(버튼 on_click 콜백 — rerun 전 안전 시점)."""
+    st.session_state["revu_url"] = url
+
+
 def render_revu_form() -> None:
     _inject_css()
     st.title("체험단 양식 — 레뷰 네이버 베이직")
@@ -1497,9 +1506,61 @@ def render_revu_form() -> None:
             "※ 타브랜드·연예인명은 자동 판별이 어려우니 직접 확인 바랍니다."
         )
 
-    # ── Step 5. 제품링크 ──
+    # ── Step 5. 제품링크 (+ 네이버 유입 추적 URL 생성) ──
     st.subheader("5. 제품링크")
-    product_url = st.text_input("제품링크 URL", key="revu_url")
+    product_url = st.text_input(
+        "제품링크 URL", key="revu_url",
+        help="아래 '네이버 유입 추적 URL 생성'으로 만든 URL을 여기에 바로 넣을 수 있습니다.")
+
+    with st.expander("🔗 네이버 유입 추적 URL 생성 (nt_)", expanded=False):
+        st.caption(
+            "제품 URL + 추적 파라미터를 조립합니다(단축 없음). "
+            "nt_source·nt_medium 은 영문/숫자/-,_,. 만(한글·공백 금지, 필수). "
+            'URL 에 이미 "?"가 있으면 자동으로 "&"로 이어붙입니다.'
+        )
+        track_base = st.text_input(
+            "제품 URL", key="revu_track_base",
+            help="예: https://m.site.naver.com/2aAvQ 또는 스마트스토어 URL")
+        col_s, col_m = st.columns(2)
+        with col_s:
+            nt_source = st.text_input(
+                "nt_source (필수)", value=DEFAULT_NT_SOURCE, key="revu_nt_source")
+        with col_m:
+            nt_medium = st.text_input(
+                "nt_medium (필수)", value=DEFAULT_NT_MEDIUM, key="revu_nt_medium")
+        col_d, col_k = st.columns(2)
+        with col_d:
+            nt_detail = st.text_input(
+                "nt_detail (선택)", value=DEFAULT_NT_DETAIL, key="revu_nt_detail")
+        with col_k:
+            # 차종이 입력돼 있으면 자동 채움(수정 가능). 키 없이 value 로 차종 변화 반영.
+            nt_keyword = st.text_input(
+                "nt_keyword (선택)", value=car_model.strip(),
+                help="제품·차종 (예: EV5에어컨필터). 차종 입력 시 자동 채움 — 한글 허용.")
+
+        track_url, track_errors = assemble_tracking_url(
+            track_base, nt_source, nt_medium, nt_detail, nt_keyword)
+        if track_errors:
+            for e in track_errors:
+                st.markdown(
+                    f'<span style="color:#dc2626;font-size:12.5px;">⚠️ {e}</span>',
+                    unsafe_allow_html=True,
+                )
+        if track_url:
+            st.code(track_url, language="text")
+            parts = [f"nt_source={nt_source}", f"nt_medium={nt_medium}"]
+            if nt_detail:
+                parts.append(f"nt_detail={nt_detail}")
+            if nt_keyword:
+                parts.append(f"nt_keyword={nt_keyword}")
+            st.caption(" · ".join(parts))
+            st.button(
+                "⬇️ 이 URL을 제품링크 칸에 넣기",
+                key="revu_apply_track",
+                on_click=_apply_tracking_url, args=(track_url,),
+            )
+        else:
+            st.info("필수값(제품 URL·nt_source·nt_medium)을 채우면 추적 URL이 생성됩니다.")
 
     # ── Step 6. 미션 (차종 입력 시 기본 문구 자동 채움, 수정 가능) ──
     st.subheader(f"6. {content_type} 미션 (1·2·3)")

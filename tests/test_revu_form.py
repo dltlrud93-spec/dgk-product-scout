@@ -19,7 +19,9 @@ from src.revu_form import (
     TEMPLATE_PATH,
     TITLE_MAX,
     RevuFormData,
+    assemble_tracking_url,
     build_revu_docx,
+    build_tracking_url,
     default_mission_lines,
     find_banned_words,
     suggest_filename,
@@ -170,3 +172,80 @@ def test_suggest_filename():
 def test_suggest_filename_no_car_model():
     data = RevuFormData(product_name="와이퍼")
     assert suggest_filename(data) == "레뷰_와이퍼.docx"
+
+
+# ── 네이버 유입 추적 URL(nt_) ────────────────────────────────────────────────
+
+def test_tracking_no_question_mark_starts_with_question():
+    """① "?" 없는 URL → "?"로 시작."""
+    url = build_tracking_url("https://m.site.naver.com/2aAvQ", "naver.blog", "social")
+    assert url == "https://m.site.naver.com/2aAvQ?nt_source=naver.blog&nt_medium=social"
+    assert url.count("?") == 1
+
+
+def test_tracking_existing_question_mark_uses_ampersand():
+    """② 이미 "?" 있는 URL → "&"로 이어붙임("?" 중복 안 됨)."""
+    url = build_tracking_url("https://store.naver.com/p?foo=1", "naver.blog", "social")
+    assert url == "https://store.naver.com/p?foo=1&nt_source=naver.blog&nt_medium=social"
+    assert url.count("?") == 1  # ★"?" 중복 방지
+
+
+def test_tracking_korean_in_source_blocked():
+    """③ nt_source 에 한글 → 경고 + 생성 차단(url None)."""
+    url, errors = assemble_tracking_url(
+        "https://m.site.naver.com/2aAvQ", "네이버블로그", "social")
+    assert url is None
+    assert any("한글" in e for e in errors)
+
+
+def test_tracking_space_blocked():
+    """④ 값에 공백 → 경고."""
+    url, errors = assemble_tracking_url(
+        "https://m.site.naver.com/2aAvQ", "naver blog", "social")
+    assert url is None
+    assert any("공백" in e for e in errors)
+
+
+def test_tracking_required_empty_blocked():
+    """⑤ 필수값(nt_source/nt_medium) 비면 차단."""
+    url, errors = assemble_tracking_url(
+        "https://m.site.naver.com/2aAvQ", "", "social")
+    assert url is None
+    assert any("nt_source" in e and "필수" in e for e in errors)
+
+
+def test_tracking_optional_empty_excluded_required_kept():
+    """⑥ 선택값 비면 그 파라미터 제외, 필수 2개는 유지."""
+    url, errors = assemble_tracking_url(
+        "https://m.site.naver.com/2aAvQ", "naver.blog", "social",
+        nt_detail="", nt_keyword="")
+    assert errors == []
+    assert "nt_source=naver.blog" in url
+    assert "nt_medium=social" in url
+    assert "nt_detail" not in url
+    assert "nt_keyword" not in url
+
+
+def test_tracking_optional_present_included_with_korean():
+    """선택값(한글 허용)이 있으면 포함된다 — nt_keyword 한글 OK."""
+    url, errors = assemble_tracking_url(
+        "https://m.site.naver.com/2aAvQ", "naver.blog", "social",
+        nt_detail="revu", nt_keyword="EV5에어컨필터")
+    assert errors == []
+    assert "nt_detail=revu" in url
+    assert "nt_keyword=EV5에어컨필터" in url
+
+
+def test_tracking_disallowed_special_char_blocked():
+    """③ 보강: 허용 외 특수문자(/,=,# 등)가 값에 있으면 차단."""
+    url, errors = assemble_tracking_url(
+        "https://m.site.naver.com/2aAvQ", "naver.blog", "soc=ial")
+    assert url is None
+    assert any("특수문자" in e for e in errors)
+
+
+def test_tracking_product_url_empty_blocked():
+    """제품 URL 자체가 비면 차단."""
+    url, errors = assemble_tracking_url("", "naver.blog", "social")
+    assert url is None
+    assert any("제품 URL" in e and "필수" in e for e in errors)
