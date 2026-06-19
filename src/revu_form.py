@@ -161,6 +161,21 @@ class RevuFormData:
     manager_email: str = DEFAULT_MANAGER_EMAIL
 
 
+def merge_keywords(existing: str, additions: list[str]) -> str:
+    """기존 콤마구분 키워드 문자열에 새 키워드를 ★덧붙인다(덮어쓰지 않음).
+
+    중복은 대소문자 무시로 제거하고, 등장 순서(기존 먼저)는 보존. ", " 로 join.
+    키워드 추천 '칸에 추가' 버튼이 쓴다 — 기존 입력 손실 없이 누적."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for kw in [*existing.split(","), *additions]:
+        k = kw.strip()
+        if k and k.lower() not in seen:
+            seen.add(k.lower())
+            out.append(k)
+    return ", ".join(out)
+
+
 def default_mission_lines(car_model: str, product_name: str) -> list[str]:
     """차종 입력 시 블로그 미션 기본 문구 자동 생성(수정 가능). 비우면 빈 3줄."""
     cm = (car_model or "").strip()

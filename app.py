@@ -85,8 +85,10 @@ from src.revu_form import (
     build_revu_docx,
     default_mission_lines,
     find_banned_words,
+    merge_keywords,
     suggest_filename,
 )
+from src.core.keyword_reco import partition_banned, recommend_keywords
 
 st.set_page_config(page_title="dgk-product-scout", layout="wide")
 
@@ -1439,6 +1441,29 @@ def _apply_tracking_url(url: str) -> None:
     st.session_state["revu_url"] = url
 
 
+# 키워드 추천: 같은 검색어 재호출 방지(1시간 캐시). 양식용 — 연관키워드+검색량만(가벼움).
+@st.cache_data(ttl=3600, show_spinner="연관 키워드 수집 중 (검색광고)...")
+def _load_reco_keywords(seed: str) -> dict:
+    """검색어 → 연관 키워드+검색량 수집 후 금지어 분리. 반환 {clean, excluded}."""
+    pairs = recommend_keywords(seed, limit=40)   # adapter 자동 생성(NAVER_AD_* 키)
+    clean, excluded = partition_banned(pairs)
+    return {"clean": clean, "excluded": excluded}
+
+
+def _add_reco_to_field(field_key: str) -> None:
+    """체크된 추천 키워드를 제목/본문 키워드 칸에 ★덧붙인다(on_click 콜백).
+
+    중복은 merge_keywords 가 제거. 적용 후 체크박스는 해제한다."""
+    reco = st.session_state.get("revu_reco", {}).get("clean", [])
+    selected = [kw for kw, _ in reco if st.session_state.get(f"revu_reco_ck::{kw}")]
+    if not selected:
+        return
+    st.session_state[field_key] = merge_keywords(
+        st.session_state.get(field_key, ""), selected)
+    for kw, _ in reco:
+        st.session_state[f"revu_reco_ck::{kw}"] = False
+
+
 def render_revu_form() -> None:
     _inject_css()
     st.title("체험단 양식 — 레뷰 네이버 베이직")
@@ -1488,8 +1513,52 @@ def render_revu_form() -> None:
         recruit_count = st.number_input(
             "모집인원", min_value=1, max_value=999, value=10, step=1, key="revu_recruit")
 
-    # ── Step 4. 키워드 ──
+    # ── Step 4. 키워드 (+ 검색광고 연관키워드 추천) ──
     st.subheader("4. 키워드")
+
+    with st.expander("🔍 키워드 추천 (검색광고 연관키워드 + 검색량)", expanded=False):
+        st.caption(
+            "차종·제품 기반 연관 키워드와 월검색량(PC+모바일)을 가져옵니다. "
+            "체크 → 제목/본문 키워드 칸에 덧붙이기(중복 자동 제거). "
+            "제목키워드 3개·본문키워드 5개까지 권장."
+        )
+        # 차종·제품명이 있으면 "{차종} {제품}" 기본값 자동 채움(수정 가능).
+        _reco_default = " ".join(p for p in (car_model.strip(), product_name.strip()) if p)
+        reco_seed = st.text_input(
+            "추천 받을 검색어", value=_reco_default, key="revu_reco_seed",
+            help='예: "EV5 에어컨필터". 차종·제품 입력 시 자동 채움.')
+        if st.button("추천 받기", key="revu_reco_btn"):
+            if reco_seed.strip():
+                try:
+                    st.session_state["revu_reco"] = _load_reco_keywords(reco_seed.strip())
+                except Exception as e:  # noqa: BLE001 — 원인 명시(429/키 미설정 등)
+                    st.error(f"키워드 추천 실패: {type(e).__name__}: {e}")
+            else:
+                st.warning("검색어를 입력하세요.")
+
+        _reco = st.session_state.get("revu_reco", {})
+        _clean = _reco.get("clean", [])
+        _excluded = _reco.get("excluded", [])
+        if _clean:
+            _n_checked = sum(
+                1 for kw, _ in _clean if st.session_state.get(f"revu_reco_ck::{kw}"))
+            st.caption(f"연관 키워드 {len(_clean)}개 · 선택 {_n_checked}개")
+            for kw, vol in _clean:
+                st.checkbox(f"{kw}  (검색량 {vol:,})", key=f"revu_reco_ck::{kw}")
+            col_at, col_ab = st.columns(2)
+            col_at.button(
+                "➕ 제목키워드에 추가", key="revu_add_title",
+                on_click=_add_reco_to_field, args=("revu_titlekw",),
+                help="제목키워드는 3개까지 권장.")
+            col_ab.button(
+                "➕ 본문키워드에 추가", key="revu_add_body",
+                on_click=_add_reco_to_field, args=("revu_bodykw",),
+                help="본문키워드는 5개까지 권장.")
+            if _excluded:
+                st.caption("⚠️ 금지어 의심으로 제외됨: " + ", ".join(_excluded))
+        elif "revu_reco" in st.session_state:
+            st.info("연관 키워드가 없습니다(검색량 0이거나 결과 없음). 다른 검색어로 시도하세요.")
+
     col_tk, col_bk = st.columns(2)
     with col_tk:
         title_keywords = st.text_area(

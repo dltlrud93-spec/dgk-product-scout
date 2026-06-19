@@ -24,8 +24,10 @@ from src.revu_form import (
     build_tracking_url,
     default_mission_lines,
     find_banned_words,
+    merge_keywords,
     suggest_filename,
 )
+from src.core.keyword_reco import partition_banned, recommend_keywords
 
 pytestmark = pytest.mark.skipif(
     not TEMPLATE_PATH.exists(),
@@ -249,3 +251,72 @@ def test_tracking_product_url_empty_blocked():
     url, errors = assemble_tracking_url("", "naver.blog", "social")
     assert url is None
     assert any("제품 URL" in e and "필수" in e for e in errors)
+
+
+# ── 키워드 추천(연관키워드 + 검색량) ─────────────────────────────────────────
+
+def _fake_keywordstool(seed):
+    """검색광고 키워드도구 응답 대역 — relKeyword + 월검색량 필드."""
+    return [
+        {"relKeyword": "EV5 에어컨필터 교체", "monthlyPcQcCnt": 500, "monthlyMobileQcCnt": 700},
+        {"relKeyword": "EV5 에어컨필터 냄새", "monthlyPcQcCnt": 300, "monthlyMobileQcCnt": 500},
+        {"relKeyword": "EV5 에어컨필터", "monthlyPcQcCnt": 100, "monthlyMobileQcCnt": 50},
+        # 검색량 0(원래 '<10') → 제외돼야 함
+        {"relKeyword": "극소키워드", "monthlyPcQcCnt": "< 10", "monthlyMobileQcCnt": 0},
+        # 중복 relKeyword → dedupe
+        {"relKeyword": "EV5 에어컨필터 교체", "monthlyPcQcCnt": 500, "monthlyMobileQcCnt": 700},
+    ]
+
+
+def test_recommend_keywords_returns_keyword_and_volume_sorted():
+    """연관키워드+검색량 수집, 검색량 내림차순, 0·중복 제외."""
+    out = recommend_keywords("EV5 에어컨필터", request_fn=_fake_keywordstool)
+    assert out == [
+        ("EV5 에어컨필터 교체", 1200),
+        ("EV5 에어컨필터 냄새", 800),
+        ("EV5 에어컨필터", 150),
+    ]
+    assert "극소키워드" not in [k for k, _ in out]  # 검색량 0 제외
+
+
+def test_recommend_keywords_empty_seed():
+    """빈 검색어 → 빈 리스트(네트워크 호출 없음)."""
+    assert recommend_keywords("", request_fn=_fake_keywordstool) == []
+    assert recommend_keywords("   ", request_fn=_fake_keywordstool) == []
+
+
+def test_recommend_keywords_limit():
+    """limit 으로 상위 N개만."""
+    out = recommend_keywords("EV5 에어컨필터", request_fn=_fake_keywordstool, limit=2)
+    assert len(out) == 2
+    assert out[0] == ("EV5 에어컨필터 교체", 1200)
+
+
+def test_partition_banned_excludes_disease_keywords():
+    """추천 키워드 중 금지어(질병명) 포함 항목 분리."""
+    pairs = [("에어컨필터 교체", 1200), ("비염 완화 필터", 300), ("탈모 방지", 100)]
+    clean, excluded = partition_banned(pairs)
+    assert ("에어컨필터 교체", 1200) in clean
+    assert "비염 완화 필터" in excluded
+    assert "탈모 방지" in excluded
+    assert all("비염" not in k and "탈모" not in k for k, _ in clean)
+
+
+# ── 키워드 칸 덧붙이기(merge) ────────────────────────────────────────────────
+
+def test_merge_keywords_into_empty():
+    assert merge_keywords("", ["에어컨필터교체", "에어컨필터냄새"]) == "에어컨필터교체, 에어컨필터냄새"
+
+
+def test_merge_keywords_appends_not_overwrite():
+    """기존 값에 덧붙임(덮어쓰지 않음)."""
+    assert merge_keywords("기존키워드", ["새키워드"]) == "기존키워드, 새키워드"
+
+
+def test_merge_keywords_dedupes():
+    """중복(대소문자 무시) 자동 제거, 순서 보존."""
+    assert merge_keywords("EV5, 에어컨필터", ["에어컨필터", "ev5", "냄새"]) == "EV5, 에어컨필터, 냄새"
+
+
+def test_merge_keywords_no_additions_keeps_existing():
+    assert merge_keywords("a, b", []) == "a, b"
