@@ -5,3 +5,5 @@ python-dotenv>=1.0
 # 조견표(구글시트) 읽기 — 주문가공기와 동일 인증(서비스계정)
 gspread>=6.1
 google-auth>=2.29
+# 체험단 양식 생성 — 빈 docx 템플릿 셀 채우기(python-docx)
+python-docx>=1.1

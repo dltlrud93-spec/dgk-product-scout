@@ -1,10 +1,12 @@
 """
 app.py — dgk-product-scout 대시보드 (Streamlit).
 
-사이드바 '화면 선택'으로 3개 화면 전환:
+사이드바 '화면 선택'으로 화면 전환:
   · 차종 수요   — Phase C 차종 수요 스캐너(규모 C-3 + 추세 C-4). 단순 표시(등록 대조 없음).
   · 계절 제품   — 계절성(데이터랩) + 규모(검색광고 단일 키워드) 통합 랭킹.
   · 키워드 탐색기 — 시드 → 연관어 수확 → 키워드·검색량·경쟁도(사실만, 판정 없음).
+  · 체험단 타겟  — 차종×제품 검색량 + 블로그 문서수 + 비율 분류.
+  · 체험단 양식  — 레뷰 빈 docx 템플릿에 입력값을 채워 양식 생성(미리보기·다운로드).
 
 실행: streamlit run app.py
 
@@ -71,6 +73,16 @@ from src.core.search_volume import (
     member_volume,
 )
 from src.core.secrets_util import resolve_secret
+from src.revu_form import (
+    SUBTITLE_MAX,
+    TEMPLATE_PATH as REVU_TEMPLATE_PATH,
+    TITLE_MAX,
+    RevuFormData,
+    build_revu_docx,
+    default_mission_lines,
+    find_banned_words,
+    suggest_filename,
+)
 
 st.set_page_config(page_title="dgk-product-scout", layout="wide")
 
@@ -1399,12 +1411,184 @@ def render_teamp() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 화면 5 — 체험단 양식 생성 (레뷰 빈 docx 템플릿 → 셀 채우기 → 미리보기·다운로드)
+# ═══════════════════════════════════════════════════════════════════════════
+# ★빈 양식(templates/revu_basic_template.docx)을 원본 로드 후 정해진 셀만 치환한다.
+#   서식·사전안내문(표12)·표 구조는 src.revu_form 이 100% 보존한다(새로 그리지 않음).
+def _char_counter(label: str, value: str, limit: int, key: str) -> str:
+    """글자수 제한 text_input — 초과 시 빨간 경고 + 실시간 카운트."""
+    val = st.text_input(label, value=value, key=key)
+    n = len(val)
+    if n > limit:
+        st.markdown(
+            f'<span style="color:#dc2626;font-size:12px;">⚠️ 현재 {n}/{limit}자 '
+            f"— {n - limit}자 초과! 줄여주세요.</span>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption(f"현재 {n}/{limit}자")
+    return val
+
+
+def render_revu_form() -> None:
+    _inject_css()
+    st.title("체험단 양식 — 레뷰 네이버 베이직")
+    st.caption(
+        "빈 표준 양식(레뷰 베이직)에 입력값을 채워 docx 를 생성합니다. "
+        "서식·사전 안내문은 원본 그대로 보존 — 정해진 빈칸만 채웁니다."
+    )
+
+    if not REVU_TEMPLATE_PATH.exists():
+        st.error(
+            f"빈 양식 템플릿을 찾을 수 없습니다: {REVU_TEMPLATE_PATH}\n\n"
+            "templates/revu_basic_template.docx 파일을 넣어주세요."
+        )
+        return
+
+    # ── Step 1. 콘텐츠 타입 ──
+    st.subheader("1. 콘텐츠 타입")
+    content_type = st.radio(
+        "콘텐츠 타입", ["블로그", "클립"], horizontal=True, label_visibility="collapsed",
+    )
+
+    # ── Step 2. 캠페인 제목/부제목 (글자수 제한) ──
+    st.subheader("2. 캠페인 제목 · 부제목")
+    col_t, col_s = st.columns(2)
+    with col_t:
+        campaign_title = _char_counter(
+            f"캠페인 제목 (최대 {TITLE_MAX}자)", "", TITLE_MAX, "revu_title")
+    with col_s:
+        campaign_subtitle = _char_counter(
+            f"캠페인 부제목 (최대 {SUBTITLE_MAX}자)", "", SUBTITLE_MAX, "revu_subtitle")
+
+    # ── Step 3. 제품 정보 ──
+    st.subheader("3. 제품 정보")
+    col_c, col_p = st.columns(2)
+    with col_c:
+        car_model = st.text_input(
+            "차종 (선택)", key="revu_car",
+            help="에어컨필터·와이퍼 등 차종이 들어가는 제품만. 비우면 차종 없이 진행.")
+    with col_p:
+        product_name = st.text_input("제품명", key="revu_product")
+    col_q, col_n = st.columns(2)
+    with col_q:
+        provide_qty = st.text_input(
+            "제공수량", key="revu_qty", help='예: "EV5 전용 에어컨필터 P17"')
+    with col_n:
+        recruit_count = st.number_input(
+            "모집인원", min_value=1, max_value=999, value=10, step=1, key="revu_recruit")
+
+    # ── Step 4. 키워드 ──
+    st.subheader("4. 키워드")
+    col_tk, col_bk = st.columns(2)
+    with col_tk:
+        title_keywords = st.text_area(
+            "제목키워드 (1~3개, 콤마 구분)", key="revu_titlekw", height=80)
+    with col_bk:
+        body_keywords = st.text_area(
+            "본문키워드 (3~5개, 콤마 구분)", key="revu_bodykw", height=80)
+
+    # 금지어 가벼운 경고(질병명·절대표현). 완벽한 필터 아님 — 경고만.
+    banned = find_banned_words(title_keywords, body_keywords, campaign_title, campaign_subtitle)
+    if banned:
+        st.warning(
+            "⚠️ 금지어/절대표현 의심: **" + ", ".join(banned) + "** — 양식 규칙상 제외하세요.\n\n"
+            "※ 타브랜드·연예인명은 자동 판별이 어려우니 직접 확인 바랍니다."
+        )
+
+    # ── Step 5. 제품링크 ──
+    st.subheader("5. 제품링크")
+    product_url = st.text_input("제품링크 URL", key="revu_url")
+
+    # ── Step 6. 미션 (차종 입력 시 기본 문구 자동 채움, 수정 가능) ──
+    st.subheader(f"6. {content_type} 미션 (1·2·3)")
+    defaults = default_mission_lines(car_model, product_name)
+    if car_model.strip():
+        st.caption("차종 입력 → 기본 문구 자동 채움. 자유롭게 수정하세요.")
+    missions = []
+    for i in range(3):
+        missions.append(st.text_input(
+            f"미션 {i + 1}", value=defaults[i], key=f"revu_mission_{i}"))
+
+    # ── Step 7. 담당자 (기본값 자동 채움, 수정 가능) ──
+    st.subheader("7. 담당자 정보")
+    col_m1, col_m2, col_m3 = st.columns(3)
+    with col_m1:
+        manager_name = st.text_input("성함", value="박민우", key="revu_mgr_name")
+    with col_m2:
+        manager_phone = st.text_input("연락처", value="010-3924-1155", key="revu_mgr_phone")
+    with col_m3:
+        manager_email = st.text_input("이메일", value="dgkorea93@naver.com", key="revu_mgr_email")
+
+    data = RevuFormData(
+        content_type=content_type,
+        campaign_title=campaign_title,
+        campaign_subtitle=campaign_subtitle,
+        car_model=car_model,
+        product_name=product_name,
+        provide_qty=provide_qty,
+        recruit_count=int(recruit_count),
+        title_keywords=title_keywords.strip(),
+        body_keywords=body_keywords.strip(),
+        product_url=product_url,
+        missions=missions,
+        manager_name=manager_name,
+        manager_phone=manager_phone,
+        manager_email=manager_email,
+    )
+
+    # ── 미리보기 ──
+    st.divider()
+    st.subheader("📋 미리보기 — 양식 칸에 들어갈 내용")
+    mission_label = f"{content_type} 미션"
+    preview_rows = [
+        ("콘텐츠 타입", content_type),
+        ("캠페인 제목", campaign_title or "—"),
+        ("캠페인 부제목", campaign_subtitle or "—"),
+        ("차종", car_model or "(없음)"),
+        ("제품명", product_name or "—"),
+        ("제공수량", (f"{provide_qty} 개" if provide_qty else "—")),
+        ("모집인원", f"{int(recruit_count)}명"),
+        ("제목키워드", title_keywords or "—"),
+        ("본문키워드", body_keywords or "—"),
+        ("제품링크", product_url or "—"),
+        (mission_label, " / ".join(m for m in missions if m) or "—"),
+        ("담당자", f"{manager_name} · {manager_phone} · {manager_email}"),
+    ]
+    _highlight_table(
+        "생성될 docx 내용 확인",
+        ["항목", "값"],
+        [[k, v] for k, v in preview_rows],
+        align=["left", "left"],
+    )
+    st.caption("※ 표12(사전 안내문)·표 서식은 원본 그대로 보존됩니다.")
+
+    # ── docx 생성·다운로드 ──
+    st.divider()
+    over_title = len(campaign_title) > TITLE_MAX
+    over_sub = len(campaign_subtitle) > SUBTITLE_MAX
+    if over_title or over_sub:
+        st.error("글자수 제한 초과 항목이 있습니다 — 제목/부제목을 줄인 뒤 생성하세요.")
+    try:
+        docx_bytes = build_revu_docx(data)
+        st.download_button(
+            "📥 체험단 양식 docx 다운로드",
+            data=docx_bytes,
+            file_name=suggest_filename(data),
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            disabled=(over_title or over_sub),
+        )
+    except Exception as e:  # noqa: BLE001 — 원인 명시(템플릿 누락 등, 조용한 폴백 금지)
+        st.error(f"docx 생성 실패: {type(e).__name__}: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 사이드바 화면 선택 → 디스패치
 # ═══════════════════════════════════════════════════════════════════════════
 st.sidebar.markdown("**화면 선택**")
 _SCREEN = st.sidebar.radio(
     "화면 선택",
-    ["차종 수요", "계절 제품", "키워드 탐색기", "체험단 타겟"],
+    ["차종 수요", "계절 제품", "키워드 탐색기", "체험단 타겟", "체험단 양식"],
     label_visibility="collapsed",
 )
 st.sidebar.divider()
@@ -1415,5 +1599,7 @@ elif _SCREEN == "계절 제품":
     render_seasonal()
 elif _SCREEN == "체험단 타겟":
     render_teamp()
+elif _SCREEN == "체험단 양식":
+    render_revu_form()
 else:
     render_keyword_explorer()
