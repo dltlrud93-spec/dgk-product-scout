@@ -118,6 +118,50 @@ def test_render_blog_reco_failure_only_warns_no_exception():
     assert len(at.get("download_button")) >= 1
 
 
+# ── 구매 의도 분류(뱃지·정렬·정보형 접힘) 실제 렌더 경로 ─────────────────────
+
+def test_render_reco_intent_badges_and_info_collapsed():
+    """검색광고 연관어에 🟢/🟡/🔴 뱃지가 붙고, 정보형은 접힘 + 안내문이 렌더된다."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "체험단 양식"
+    at.session_state["revu_reco"] = {
+        "clean": [
+            ("에어컨필터추천", 100),       # 🟢 buy
+            ("에어컨필터교체주기", 50),    # 🟡 mid
+            ("에어컨필터교체방법", 30),    # 🔴 info
+        ],
+        "excluded": [],
+    }
+    at.run()
+    assert not at.exception, f"분류 렌더 예외: {at.exception}"
+    cks = {c.label for c in at.checkbox}
+    assert any(lbl.startswith("🟢") and "추천" in lbl for lbl in cks)
+    assert any(lbl.startswith("🟡") and "교체주기" in lbl for lbl in cks)
+    assert any(lbl.startswith("🔴") and "교체방법" in lbl for lbl in cks)
+    # 정보형은 접힌 expander 로 분리(라벨에 안내문) — 완전히 숨기지 않음
+    exp_labels = [e.label for e in at.expander]
+    assert any("이미 구매한 사람이 찾는 키워드" in lbl for lbl in exp_labels)
+
+
+def test_render_blog_reco_intent_badges():
+    """블로그 제목 키워드에도 동일하게 분류 뱃지가 적용된다."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "체험단 양식"
+    at.session_state["revu_blog_reco"] = {
+        "keywords": [("냄새", 5), ("교체주기", 3), ("셀프교체", 2)],
+        "titles": ["EV5 에어컨필터 냄새", "EV5 셀프교체"],
+        "excluded": [],
+    }
+    at.run()
+    assert not at.exception, f"블로그 분류 렌더 예외: {at.exception}"
+    cks = {c.label for c in at.checkbox}
+    assert any(lbl.startswith("🟢") and "냄새" in lbl for lbl in cks)   # buy
+    assert any(lbl.startswith("🟡") and "교체주기" in lbl for lbl in cks)  # mid
+    assert any(lbl.startswith("🔴") and "셀프교체" in lbl for lbl in cks)  # info(접힘)
+
+
 # ── 저장/불러오기 실제 렌더 경로 ─────────────────────────────────────────────
 
 def test_render_has_save_and_docx_download_buttons():

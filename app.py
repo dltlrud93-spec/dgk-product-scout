@@ -90,6 +90,7 @@ from src.revu_form import (
     serialize_form,
     suggest_filename,
 )
+from src.core.keyword_intent import BADGE, classify_intent
 from src.core.keyword_reco import (
     partition_banned,
     recommend_blog_keywords,
@@ -1504,6 +1505,37 @@ def _add_blog_reco_to_field(field_key: str) -> None:
         st.session_state[f"revu_blog_ck::{kw}"] = False
 
 
+def _render_reco_checkboxes(pairs, ck_prefix: str, label_fn) -> None:
+    """추천 키워드를 구매 의도별로 분류·정렬해 체크박스로 렌더한다(두 섹션 공용).
+
+    구매형(🟢)→중간(🟡)은 본문에 바로, 정보형(🔴)은 ★접힌 expander 안에 표시
+    (완전히 숨기지 않음 — 시경이 직접 골라 담을 수 있게). 모든 키워드에 체크박스를
+    만들어야 '추가' 콜백이 선택을 인식하므로, 정보형도 키만 expander 안에서 생성한다.
+
+    pairs: [(kw, val), ...] / ck_prefix: 체크박스 key 접두("revu_reco_ck::" 등)
+    label_fn: val → 괄호 안 표시 문자열(예: lambda v: f"검색량 {v:,}").
+    """
+    buys, mids, infos = [], [], []
+    for kw, val in pairs:
+        cat = classify_intent(kw)
+        (buys if cat == "buy" else infos if cat == "info" else mids).append((kw, val))
+    for kw, val in buys + mids:
+        cat = classify_intent(kw)
+        st.checkbox(
+            f"{BADGE[cat]} {kw}  ({label_fn(val)})", key=f"{ck_prefix}{kw}")
+    if infos:
+        with st.expander(
+            f"🔴 이미 구매한 사람이 찾는 키워드 (매출 연결 낮음) · {len(infos)}개",
+            expanded=False,
+        ):
+            st.caption(
+                "이미 제품을 산 뒤 사용법·교체방법을 찾는 검색어라 체험단 노출이 "
+                "매출로 잘 이어지지 않습니다. 필요하면 직접 골라 담으세요.")
+            for kw, val in infos:
+                st.checkbox(
+                    f"🔴 {kw}  ({label_fn(val)})", key=f"{ck_prefix}{kw}")
+
+
 def _fill_missions_from_car(car_model: str, product_name: str) -> None:
     """차종·제품 기반 기본 미션 문구를 미션 칸에 채운다(on_click 콜백 — 덮어씀)."""
     for i, line in enumerate(default_mission_lines(car_model, product_name)):
@@ -1658,9 +1690,11 @@ def render_revu_form() -> None:
         if _clean:
             _n_checked = sum(
                 1 for kw, _ in _clean if st.session_state.get(f"revu_reco_ck::{kw}"))
-            st.caption(f"연관 키워드 {len(_clean)}개 · 선택 {_n_checked}개")
-            for kw, vol in _clean:
-                st.checkbox(f"{kw}  (검색량 {vol:,})", key=f"revu_reco_ck::{kw}")
+            st.caption(
+                f"연관 키워드 {len(_clean)}개 · 선택 {_n_checked}개 "
+                "· 🟢구매형 우선 / 🟡중간 / 🔴정보형(접힘)")
+            _render_reco_checkboxes(
+                _clean, "revu_reco_ck::", lambda v: f"검색량 {v:,}")
             col_at, col_ab = st.columns(2)
             col_at.button(
                 "➕ 제목키워드에 추가", key="revu_add_title",
@@ -1690,9 +1724,10 @@ def render_revu_form() -> None:
                 1 for kw, _ in _blog_kws if st.session_state.get(f"revu_blog_ck::{kw}"))
             st.caption(
                 f"제목에서 뽑은 키워드 {len(_blog_kws)}개 · 선택 {_n_bchecked}개 "
-                "(괄호 = 등장 제목 수). 형태소분석 없는 빈도 추출이라 노이즈가 있을 수 있어요.")
-            for kw, cnt in _blog_kws:
-                st.checkbox(f"{kw}  (제목 {cnt}개)", key=f"revu_blog_ck::{kw}")
+                "(괄호 = 등장 제목 수). 🟢구매형 우선 / 🟡중간 / 🔴정보형(접힘). "
+                "형태소분석 없는 빈도 추출이라 노이즈가 있을 수 있어요.")
+            _render_reco_checkboxes(
+                _blog_kws, "revu_blog_ck::", lambda v: f"제목 {v}개")
             col_bt, col_bb = st.columns(2)
             col_bt.button(
                 "➕ 제목키워드에 추가", key="revu_blog_add_title",
