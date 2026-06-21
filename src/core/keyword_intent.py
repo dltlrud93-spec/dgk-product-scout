@@ -51,6 +51,9 @@ _BUY_WIPER = [
 ]
 _BUY_RAW = _BUY_COMMON + _BUY_AIRFILTER + _BUY_WIPER
 
+# 🟢구매형 단어 ★단일 출처(중복 정의 후 표기순·중복 제거). AI 프롬프트 등 외부에서 재사용.
+BUY_KEYWORDS = tuple(dict.fromkeys(_BUY_RAW))
+
 # 🟡 중간 — 살 수도, 정보만 볼 수도. 사전에 없는 키워드도 여기(기본).
 _MID_RAW = [
     "교체주기", "교체시기", "주기", "시기", "후기", "사용기", "미세먼지",

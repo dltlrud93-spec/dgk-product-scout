@@ -7,3 +7,5 @@ gspread>=6.1
 google-auth>=2.29
 # 체험단 양식 생성 — 빈 docx 템플릿 셀 채우기(python-docx)
 python-docx>=1.1
+# AI 키워드 자동완성 — Claude API(체험단 양식 Step4)
+anthropic>=0.40

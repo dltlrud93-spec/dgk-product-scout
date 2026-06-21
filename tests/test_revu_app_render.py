@@ -199,6 +199,45 @@ def test_render_blog_reco_no_product_titles_warns():
     assert len(at.get("download_button")) >= 1   # 양식은 그대로 동작
 
 
+# ── 🤖 AI 키워드 자동완성 실제 렌더 경로 ─────────────────────────────────────
+
+def test_render_ai_section_present_and_button():
+    """AI 자동완성 섹션 라벨 + 생성 버튼이 렌더된다(키 없으면 안내 캡션)."""
+    at = _open_revu_form()
+    assert not at.exception
+    blob = " ".join(m.value for m in at.markdown)
+    assert "AI 키워드 자동완성" in blob
+    btns = {b.label for b in at.button}
+    assert "AI로 키워드 생성" in btns
+    # 로컬/테스트엔 ANTHROPIC_API_KEY 가 없어 안내 캡션이 뜬다
+    caps = " ".join(c.value for c in at.caption)
+    assert "ANTHROPIC_API_KEY" in caps
+
+
+def test_render_ai_reco_results_badges():
+    """주입된 AI 키워드가 🟢/🟡/🔴 분류 뱃지로 렌더되고 정보형은 접힌다."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "체험단 양식"
+    at.session_state["revu_ai_reco"] = {
+        "clean": [
+            ("EV5에어컨필터냄새", None),   # 🟢 buy
+            ("에어컨필터교체주기", None),  # 🟡 mid
+            ("에어컨필터교체방법", None),  # 🔴 info
+        ],
+        "excluded": [],
+    }
+    at.run()
+    assert not at.exception, f"AI 키워드 렌더 예외: {at.exception}"
+    cks = {c.label for c in at.checkbox}
+    assert any(lbl.startswith("🟢") and "냄새" in lbl for lbl in cks)
+    assert any(lbl.startswith("🟡") and "교체주기" in lbl for lbl in cks)
+    assert any(lbl.startswith("🔴") and "교체방법" in lbl for lbl in cks)
+    # 추가 버튼(제목/본문)도 존재
+    btns = {b.label for b in at.button}
+    assert "➕ 제목키워드에 추가" in btns and "➕ 본문키워드에 추가" in btns
+
+
 # ── 저장/불러오기 실제 렌더 경로 ─────────────────────────────────────────────
 
 def test_render_has_save_and_docx_download_buttons():

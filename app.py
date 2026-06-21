@@ -90,6 +90,7 @@ from src.revu_form import (
     serialize_form,
     suggest_filename,
 )
+from src.core.keyword_ai import generate_ai_keywords
 from src.core.keyword_intent import BADGE, classify_intent
 from src.core.keyword_reco import (
     partition_banned,
@@ -1536,6 +1537,32 @@ def _render_reco_checkboxes(pairs, ck_prefix: str, label_fn) -> None:
                     f"🔴 {kw}  ({label_fn(val)})", key=f"{ck_prefix}{kw}")
 
 
+# AI 키워드 자동완성: (차종, 제품) 동일 입력 6시간 캐시 — API 재호출(비용) 차단.
+@st.cache_data(ttl=21600, show_spinner="AI 키워드 생성 중 (Claude)...")
+def _load_ai_keywords(vehicle: str, product: str) -> dict:
+    """차종+제품 → Claude 구매형 키워드 생성 → 금지어 분리. 반환 {clean, excluded}.
+
+    api_key 는 st.secrets 까지 보는 _secret_candidates 로 해석해 generate 에 주입
+    (keyword_ai 는 순수 함수라 st.secrets 를 직접 안 봄). 실패는 generate 가 [] 로 흡수."""
+    key = resolve_secret(_secret_candidates("ANTHROPIC_API_KEY"))
+    kws = generate_ai_keywords(vehicle, product, api_key=key)
+    pairs = [(kw, None) for kw in kws]
+    clean, excluded = partition_banned(pairs)   # 금지어 제외(단일 출처 재사용)
+    return {"clean": clean, "excluded": excluded}
+
+
+def _add_ai_reco_to_field(field_key: str) -> None:
+    """체크된 AI 키워드를 제목/본문 키워드 칸에 덧붙인다(중복 제거). 적용 후 체크 해제."""
+    reco = st.session_state.get("revu_ai_reco", {}).get("clean", [])
+    selected = [kw for kw, _ in reco if st.session_state.get(f"revu_ai_ck::{kw}")]
+    if not selected:
+        return
+    st.session_state[field_key] = merge_keywords(
+        st.session_state.get(field_key, ""), selected)
+    for kw, _ in reco:
+        st.session_state[f"revu_ai_ck::{kw}"] = False
+
+
 def _fill_missions_from_car(car_model: str, product_name: str) -> None:
     """차종·제품 기반 기본 미션 문구를 미션 칸에 채운다(on_click 콜백 — 덮어씀)."""
     for i, line in enumerate(default_mission_lines(car_model, product_name)):
@@ -1681,6 +1708,48 @@ def render_revu_form() -> None:
                         "error": f"{type(e).__name__}: {e}"}
             else:
                 st.warning("검색어를 입력하세요.")
+
+        # ── 🤖 AI 키워드 자동완성(Claude) — 이미 입력된 차종·제품 사용 ──
+        st.markdown("**🤖 AI 키워드 자동완성**")
+        _ai_key = resolve_secret(_secret_candidates("ANTHROPIC_API_KEY"))
+        _ai_product = product_name.strip()
+        _ai_disabled = not (_ai_key and _ai_product)
+        if not _ai_key:
+            st.caption("⚠️ AI 자동완성을 쓰려면 Secrets 에 ANTHROPIC_API_KEY 가 필요합니다.")
+        elif not _ai_product:
+            st.caption("위 제품명을 입력하면 AI 자동완성을 쓸 수 있습니다(차종은 선택).")
+        else:
+            st.caption(
+                f"‘{(car_model.strip() + ' ' + _ai_product).strip()}’ 기반 구매형 키워드를 "
+                "Claude 가 생성합니다. 🟢구매형 우선 / 🟡중간 / 🔴정보형(접힘).")
+        if st.button("AI로 키워드 생성", key="revu_ai_btn", disabled=_ai_disabled):
+            try:
+                st.session_state["revu_ai_reco"] = _load_ai_keywords(
+                    car_model.strip(), _ai_product)
+            except Exception as e:  # noqa: BLE001 — 키 미설정 등은 경고만(앱 유지)
+                st.warning(f"AI 키워드 생성 실패: {type(e).__name__}: {e}")
+
+        _ai = st.session_state.get("revu_ai_reco", {})
+        _ai_clean = _ai.get("clean", [])
+        _ai_excluded = _ai.get("excluded", [])
+        if _ai_clean:
+            _n_aichecked = sum(
+                1 for kw, _ in _ai_clean if st.session_state.get(f"revu_ai_ck::{kw}"))
+            st.caption(f"AI 키워드 {len(_ai_clean)}개 · 선택 {_n_aichecked}개")
+            _render_reco_checkboxes(_ai_clean, "revu_ai_ck::", lambda v: "AI")
+            col_ait, col_aib = st.columns(2)
+            col_ait.button(
+                "➕ 제목키워드에 추가", key="revu_ai_add_title",
+                on_click=_add_ai_reco_to_field, args=("revu_titlekw",),
+                help="제목키워드는 3개까지 권장.")
+            col_aib.button(
+                "➕ 본문키워드에 추가", key="revu_ai_add_body",
+                on_click=_add_ai_reco_to_field, args=("revu_bodykw",),
+                help="본문키워드는 5개까지 권장.")
+            if _ai_excluded:
+                st.caption("⚠️ 금지어 의심으로 제외됨: " + ", ".join(_ai_excluded))
+        elif "revu_ai_reco" in st.session_state:
+            st.info("AI 키워드가 없습니다(빈 결과). 제품명을 더 구체적으로 입력해 보세요.")
 
         # ── ① 검색광고 연관키워드(현행) ──
         st.markdown("**🔎 검색광고 연관키워드**")
