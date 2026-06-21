@@ -499,6 +499,82 @@ def test_recommend_blog_keywords_propagates_fetch_error():
         recommend_blog_keywords("에어컨필터", titles_fn=_boom)
 
 
+# ── 블로그 제목: 제품 관련성 필터(차량 일반 글 제외) ─────────────────────────
+
+# EV5 일반 글(보조금·연비 등)이 섞여 반환되는 실제 상황 재현.
+_MIXED_BLOG_TITLES = [
+    "기아 EV5 에어컨필터 교체주기 냄새 활성탄 후기",   # 제품 글 ✔
+    "EV5 캐빈필터 셀프 교체 방법",                      # 제품 글 ✔
+    "EV5 보조금 연비 풀체인지 총정리",                  # 무관 글 ✘
+    "EV5 주행거리 제원표 모의견적 유지비",             # 무관 글 ✘
+    "기아 EV5 GT 트림 출고 계약 후기",                  # 무관 글 ✘
+]
+
+
+def test_blog_extracts_only_from_product_titles():
+    """제품(에어컨필터)어가 든 제목만 추출 — EV5 일반 글의 무관어는 안 나온다."""
+    out = recommend_blog_keywords("EV5 에어컨필터", titles=_MIXED_BLOG_TITLES)
+    words = [k for k, _ in out["keywords"]]
+    for noise in ["보조금", "연비", "풀체인지", "주행거리", "제원표",
+                  "모의견적", "유지비", "트림", "출고", "계약"]:
+        assert noise not in words, f"무관어가 추출됨: {noise}"
+    # 제품 관련어는 정상 추출
+    assert "교체주기" in words
+    assert "냄새" in words
+    assert "활성탄" in words
+    assert "캐빈필터" in words
+
+
+def test_blog_excludes_vehicle_general_and_brand_words():
+    """제품 제목 안에 섞인 차량 일반어·브랜드는 제외, 제품 관련어는 유지."""
+    titles = ["에어컨필터 교체 기아 보조금 연비 활성탄 헤파"]
+    out = recommend_blog_keywords("에어컨필터", titles=titles)
+    words = [k for k, _ in out["keywords"]]
+    assert "기아" not in words and "보조금" not in words and "연비" not in words
+    # ★제품 관련어는 살아남는다
+    assert "활성탄" in words and "헤파" in words and "교체" in words
+
+
+def test_blog_wiper_only_product_titles():
+    """와이퍼도 동일 — 와이퍼 무관어(연비·유지비) 제외, 와이퍼 관련어만."""
+    titles = [
+        "쏘렌토 와이퍼 교체주기 사이즈 발수 후기",   # 제품 글 ✔
+        "쏘렌토 연비 유지비 보조금 신형 총정리",      # 무관 글 ✘
+    ]
+    out = recommend_blog_keywords("쏘렌토 와이퍼", titles=titles)
+    words = [k for k, _ in out["keywords"]]
+    assert "교체주기" in words and "사이즈" in words and "발수" in words
+    assert "연비" not in words and "유지비" not in words and "보조금" not in words
+
+
+def test_blog_counts_product_titles():
+    """결과 dict 에 제품 관련 제목 수/전체 제목 수가 담긴다(앱 안내문용)."""
+    out = recommend_blog_keywords("EV5 에어컨필터", titles=_MIXED_BLOG_TITLES)
+    assert out["n_total_titles"] == 5
+    assert out["n_product_titles"] == 2
+
+
+def test_blog_fallback_when_no_product_titles():
+    """제품어가 든 제목이 하나도 없어도 죽지 않고 빈 결과 + 원문은 보존."""
+    titles = ["EV5 보조금 연비 총정리", "EV5 풀체인지 주행거리"]
+    out = recommend_blog_keywords("EV5 에어컨필터", titles=titles)
+    assert out["keywords"] == []          # 추출 0(노이즈 안 끌어옴)
+    assert out["n_product_titles"] == 0
+    assert out["titles"] == titles        # 원문 제목은 참고용으로 그대로 보존
+
+
+def test_detect_product_synonyms():
+    """검색어에서 제품군 식별 — 차종명만 있으면 None(필터 미적용)."""
+    from src.core.keyword_reco import detect_product_synonyms
+
+    af = detect_product_synonyms("EV5 에어컨필터")
+    assert af and "캐빈필터" in af and "필터" in af
+    wp = detect_product_synonyms("쏘렌토 와이퍼")
+    assert wp and "블레이드" in wp
+    assert detect_product_synonyms("EV5") is None       # 제품어 없음 → 필터 안 함
+    assert detect_product_synonyms("") is None
+
+
 # ── 블로그 제목 수집(HTML 정제) ──────────────────────────────────────────────
 
 def test_fetch_blog_titles_strips_html_and_skips_empty():

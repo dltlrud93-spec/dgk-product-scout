@@ -1719,6 +1719,18 @@ def render_revu_form() -> None:
         _blog_kws = _blog.get("keywords", [])
         _blog_titles = _blog.get("titles", [])
         _blog_excluded = _blog.get("excluded", [])
+        # 제품 관련성 필터 결과 안내(차량 일반 글 제외됨).
+        _n_prod = _blog.get("n_product_titles")
+        _n_tot = _blog.get("n_total_titles")
+        if _n_tot and _n_prod is not None and _n_prod < _n_tot:
+            if _n_prod == 0:
+                st.warning(
+                    "⚠️ 제품 관련 블로그 글을 찾지 못했습니다(신차 등으로 글이 적음). "
+                    "검색광고 연관어나 직접 입력을 활용하세요.")
+            else:
+                st.caption(
+                    f"🎯 제품 관련 제목 {_n_prod}/{_n_tot}개에서만 키워드를 뽑았습니다"
+                    "(보조금·연비 등 차량 일반 글 제외).")
         if _blog_kws:
             _n_bchecked = sum(
                 1 for kw, _ in _blog_kws if st.session_state.get(f"revu_blog_ck::{kw}"))

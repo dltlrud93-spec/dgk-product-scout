@@ -162,6 +162,43 @@ def test_render_blog_reco_intent_badges():
     assert any(lbl.startswith("🔴") and "셀프교체" in lbl for lbl in cks)  # info(접힘)
 
 
+def test_render_blog_reco_product_filter_note():
+    """제품 관련성 필터 안내(제품 관련 제목 N/M개)가 렌더된다(무예외)."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "체험단 양식"
+    at.session_state["revu_blog_reco"] = {
+        "keywords": [("교체주기", 1), ("활성탄", 1)],
+        "titles": ["EV5 에어컨필터 교체주기 활성탄", "EV5 보조금 연비 총정리"],
+        "excluded": [],
+        "n_product_titles": 1,
+        "n_total_titles": 2,
+    }
+    at.run()
+    assert not at.exception, f"제품 필터 안내 렌더 예외: {at.exception}"
+    caps = " ".join(c.value for c in at.caption)
+    assert "제품 관련 제목" in caps
+
+
+def test_render_blog_reco_no_product_titles_warns():
+    """제품 관련 제목 0개면 경고만 뜨고 화면은 그대로(무예외)."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "체험단 양식"
+    at.session_state["revu_blog_reco"] = {
+        "keywords": [],
+        "titles": ["EV5 보조금 연비", "EV5 풀체인지 주행거리"],
+        "excluded": [],
+        "n_product_titles": 0,
+        "n_total_titles": 2,
+    }
+    at.run()
+    assert not at.exception, f"제품 0개 경고 렌더 예외: {at.exception}"
+    warns = " ".join(w.value for w in at.warning)
+    assert "제품 관련 블로그 글을 찾지 못했습니다" in warns
+    assert len(at.get("download_button")) >= 1   # 양식은 그대로 동작
+
+
 # ── 저장/불러오기 실제 렌더 경로 ─────────────────────────────────────────────
 
 def test_render_has_save_and_docx_download_buttons():

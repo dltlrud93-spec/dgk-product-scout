@@ -82,7 +82,7 @@ _TITLE_TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]+")
 
 # 불용어: 조사·일반어·블로그 상투어. 키워드 가치가 없는 단어만(교체·냄새·후기·셀프 등
 # 의미 있는 키워드는 ★남긴다). 노이즈를 줄이는 출발점 — 운영하며 보강.
-BLOG_STOPWORDS = frozenset({
+_BASE_BLOG_STOPWORDS = frozenset({
     # 블로그 상투어·정리어
     "후기는", "리뷰", "내돈내산", "솔직", "찐", "리얼", "총정리", "정리", "기록",
     "일상", "데일리", "블로그", "네이버", "스토리", "이야기", "꿀팁", "추천", "공유",
@@ -97,6 +97,70 @@ BLOG_STOPWORDS = frozenset({
     "그래서", "근데", "그리고요", "어떻게", "무엇", "어디", "언제", "왜",
 })
 
+# 차량 일반어·구매/스펙어·브랜드(제조사) — 에어컨필터·와이퍼와 ★무관한 노이즈.
+# 신차("EV5") 블로그 검색이 일반 차량 글을 섞어 반환할 때 따라오는 단어들.
+# ★제품 관련어(활성탄·헤파·냄새·사이즈·발수 등)는 ★절대 넣지 않는다(유지돼야 함).
+# "하이브리드"는 와이퍼 제품 타입이기도 해서(제품 관련어) 일부러 제외하지 않는다.
+# 매칭은 토큰 ★완전일치(소문자)라 영문은 소문자로 적는다.
+VEHICLE_STOPWORDS = frozenset({
+    # 차량 일반·구매/스펙어
+    "보조금", "연비", "유지비", "풀체인지", "주행거리", "제원표", "모의견적",
+    "신형", "전기차", "패밀리", "스탠다드", "가솔린", "디젤", "트림", "출고",
+    "계약", "견적", "할부", "리스", "보험", "gt",
+    # 브랜드·제조사(차종명 일반)
+    "기아", "현대", "제네시스", "쉐보레", "르노", "쌍용",
+})
+
+BLOG_STOPWORDS = _BASE_BLOG_STOPWORDS | VEHICLE_STOPWORDS
+
+
+# 제품 동의어 — 블로그 제목이 '제품 관련 글'인지 판정 + 검색어에서 제품 식별용.
+# key 는 대표 제품군, value 는 제목/검색어에 포함되면 그 제품으로 보는 단어들.
+# ★부분 문자열 매칭(정규화 후) — "에어컨 필터"는 정규화 시 "에어컨필터"와 같아진다.
+PRODUCT_SYNONYMS = {
+    "에어컨필터": [
+        "에어컨필터", "에어컨 필터", "캐빈필터", "에어필터", "에어콘필터",
+        "향균필터", "항균필터", "공조필터", "필터",
+    ],
+    "와이퍼": [
+        "와이퍼", "와이퍼블레이드", "블레이드", "윈도우브러시",
+    ],
+}
+
+
+def _norm(text: str) -> str:
+    """소문자화 + 모든 공백 제거 — 대소문자·띄어쓰기 무관 매칭용."""
+    return re.sub(r"\s+", "", (text or "")).lower()
+
+
+# 제품군별 정규화 동의어 집합(미리 계산).
+_PRODUCT_SYN_NORM = {
+    fam: frozenset(_norm(w) for w in syns) for fam, syns in PRODUCT_SYNONYMS.items()
+}
+
+
+def detect_product_synonyms(seed: str) -> Optional[frozenset]:
+    """검색어에서 제품을 식별해 그 제품의 ★정규화 동의어 집합을 돌려준다.
+
+    예: "EV5 에어컨필터" → 에어컨필터 동의어({에어컨필터, 캐빈필터, 필터, ...}).
+    여러 제품군이 걸리면 합집합. 알려진 제품어가 없으면(차종명만 등) None
+    → 호출부는 제목 필터를 적용하지 않는다(기존 동작 유지).
+    """
+    s = _norm(seed)
+    if not s:
+        return None
+    matched: set[str] = set()
+    for syns in _PRODUCT_SYN_NORM.values():
+        if any(w in s for w in syns):
+            matched |= syns
+    return frozenset(matched) if matched else None
+
+
+def _title_has_product(title: str, product_terms) -> bool:
+    """제목(정규화)에 제품 동의어가 하나라도 포함되는지."""
+    t = _norm(title)
+    return any(w in t for w in product_terms)
+
 
 def extract_title_keywords(
     titles: list[str],
@@ -104,13 +168,23 @@ def extract_title_keywords(
     *,
     limit: int = 20,
     stopwords=BLOG_STOPWORDS,
+    product_terms=None,
 ) -> list[tuple[str, int]]:
     """블로그 글 제목들에서 키워드 후보를 빈도 기반으로 추출한다(형태소분석 없음).
 
     반환: [(키워드, 등장 제목 수), ...]. 등장 제목 수 내림차순(동률은 첫 등장 순).
-    제외: ①검색어 토큰(과 그 결합형) ②불용어 ③1글자 ④숫자만. 빈도는 ★제목 단위 1회
-    (document frequency) — 한 제목이 같은 단어를 반복해도 1로만 센다(스팸 제목 과대평가 방지).
+    제외: ①검색어 토큰(과 그 결합형) ②불용어(차량 일반어 포함) ③1글자 ④숫자만.
+    빈도는 ★제목 단위 1회(document frequency).
+
+    ★제품 관련성 필터: product_terms 가 주어지거나 검색어에서 제품을 식별하면,
+    제품 동의어가 든 제목에서만 키워드를 뽑는다(차량 일반 글의 보조금·연비 등 차단).
+    제품 식별이 안 되면 필터하지 않는다(기존 동작 유지).
     """
+    if product_terms is None:
+        product_terms = detect_product_synonyms(seed)
+    if product_terms:
+        titles = [t for t in titles if _title_has_product(t, product_terms)]
+
     seed_tok_list = [t.lower() for t in _TITLE_TOKEN_RE.findall(seed or "")]
     # 검색어 자체("EV5 에어컨필터")와 공백 제거 결합형("ev5에어컨필터")도 제외 대상.
     # ★결합형은 검색어 등장 순서 그대로 이어붙인다(set join 은 순서 비결정적 → 매칭 실패).
@@ -165,6 +239,21 @@ def recommend_blog_keywords(
         titles = titles_fn(seed) if titles_fn is not None else []
     title_list = list(titles)
 
+    # 제품 관련성: 제품을 식별하면 그 제품이 든 제목만 키워드 추출 대상(나머지 제외).
+    product_terms = detect_product_synonyms(seed)
+    n_total = len(title_list)
+    n_product = (
+        sum(1 for t in title_list if _title_has_product(t, product_terms))
+        if product_terms else n_total
+    )
+
     pairs = extract_title_keywords(title_list, seed, limit=limit)
     clean, excluded = partition_banned(pairs)   # 금지어 제외(단일 출처 재사용)
-    return {"keywords": clean, "titles": title_list, "excluded": excluded}
+    # titles 는 ★원문 전체 보존(시경이 맥락 참고용으로 모두 볼 수 있게).
+    return {
+        "keywords": clean,
+        "titles": title_list,
+        "excluded": excluded,
+        "n_product_titles": n_product,
+        "n_total_titles": n_total,
+    }
