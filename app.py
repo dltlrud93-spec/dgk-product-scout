@@ -21,6 +21,7 @@ app.py — dgk-product-scout 대시보드 (Streamlit).
 
 from __future__ import annotations
 
+import html
 import os
 import pathlib
 import sys
@@ -218,6 +219,29 @@ _CSS = """<style>
 
 def _inject_css() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
+
+
+# 전 화면 공통 색감(목업: 흰 카드 + 청회색 배경 + 파란 포인트).
+# ★주의: 아래 [data-testid]/[data-baseweb] 선택자는 Streamlit 내부 구조 의존 →
+# 메이저 업데이트 시 '색만' 원복될 수 있음(기능 무관). 그때 선택자만 갱신하면 된다.
+# (탭 밑줄·라디오·기본버튼 파랑은 config.toml primaryColor 가 처리 → CSS 불필요.)
+_GLOBAL_CSS = """<style>
+/* 섹션 제목 — 우리 클래스(안 깨짐) */
+.fsec{font-size:15px;font-weight:600;color:#16324F;margin:2px 0 12px;
+      padding-left:9px;border-left:3px solid #185FA5}
+/* 카드(섹션 컨테이너) — st.container(border=True) 래퍼에 흰 배경 */
+div[data-testid="stVerticalBlockBorderWrapper"]{
+  background:#fff;border:1px solid #DCE5F0!important;border-radius:11px;
+  box-shadow:0 1px 2px rgba(22,50,79,.04)}
+/* 입력/선택/텍스트영역 — 흰 바탕+테두리 */
+div[data-baseweb="input"],div[data-baseweb="select"]>div,
+div[data-baseweb="textarea"]{background:#F6F9FD;border:1px solid #D4DEEC!important;
+  border-radius:8px}
+</style>"""
+
+
+def _inject_global_css() -> None:
+    st.markdown(_GLOBAL_CSS, unsafe_allow_html=True)
 
 
 def _chips(items: list) -> None:
@@ -1707,349 +1731,356 @@ def render_revu_form() -> None:
 
     with tab_basic:
         # ── Step 1. 콘텐츠 타입 · 옵션(드롭다운 위젯 → 선택 텍스트로 양식에 박힘) ──
-        st.subheader("콘텐츠 타입 · 옵션")
-        col_ct, col_pc, col_ug = st.columns(3)
-        with col_ct:
-            content_type = st.radio("콘텐츠 타입", ["블로그", "클립"], key="revu_content_type")
-        with col_pc:
-            purchase_combine = st.radio(
-                "구매평 결합", ["아니오", "예"], key="revu_purchase_combine")
-        with col_ug:
-            urgent = st.radio("긴급 진행", ["아니오", "예"], key="revu_urgent")
+        with st.container(border=True):
+            st.markdown("<div class='fsec'>콘텐츠 타입 · 옵션</div>", unsafe_allow_html=True)
+            col_ct, col_pc, col_ug = st.columns(3)
+            with col_ct:
+                content_type = st.radio("콘텐츠 타입", ["블로그", "클립"], key="revu_content_type")
+            with col_pc:
+                purchase_combine = st.radio(
+                    "구매평 결합", ["아니오", "예"], key="revu_purchase_combine")
+            with col_ug:
+                urgent = st.radio("긴급 진행", ["아니오", "예"], key="revu_urgent")
 
-        # ── Step 2. 캠페인 제목/부제목 (글자수 제한) ──
-        st.subheader("캠페인 제목 · 부제목")
-        col_t, col_s = st.columns(2)
-        with col_t:
-            campaign_title = _char_counter(
-                f"캠페인 제목 (최대 {TITLE_MAX}자)", TITLE_MAX, "revu_title")
-        with col_s:
-            campaign_subtitle = _char_counter(
-                f"캠페인 부제목 (최대 {SUBTITLE_MAX}자)", SUBTITLE_MAX, "revu_subtitle")
+            # ── Step 2. 캠페인 제목/부제목 (글자수 제한) ──
+        with st.container(border=True):
+            st.markdown("<div class='fsec'>캠페인 제목 · 부제목</div>", unsafe_allow_html=True)
+            col_t, col_s = st.columns(2)
+            with col_t:
+                campaign_title = _char_counter(
+                    f"캠페인 제목 (최대 {TITLE_MAX}자)", TITLE_MAX, "revu_title")
+            with col_s:
+                campaign_subtitle = _char_counter(
+                    f"캠페인 부제목 (최대 {SUBTITLE_MAX}자)", SUBTITLE_MAX, "revu_subtitle")
 
-        # ── Step 3. 제품 정보 ──
-        st.subheader("제품 정보")
-        col_c, col_p = st.columns(2)
-        with col_c:
-            car_model = st.text_input(
-                "차종 (선택)", key="revu_car",
-                help="에어컨필터·와이퍼 등 차종이 들어가는 제품만. 비우면 차종 없이 진행.")
-        with col_p:
-            product_name = st.text_input("제품명", key="revu_product")
-        col_q, col_n = st.columns(2)
-        with col_q:
-            provide_qty = st.text_input(
-                "제공수량 (예: EV5 에어컨필터 P17 2개)", key="revu_qty",
-                help="제품 스펙 + 수량 단위(\"2개\" 등)까지 직접 입력하세요. 양식에 그대로 들어갑니다.")
-        with col_n:
-            recruit_count = st.number_input(
-                "모집인원", min_value=1, max_value=999, step=1, key="revu_recruit")
+            # ── Step 3. 제품 정보 ──
+        with st.container(border=True):
+            st.markdown("<div class='fsec'>제품 정보</div>", unsafe_allow_html=True)
+            col_c, col_p = st.columns(2)
+            with col_c:
+                car_model = st.text_input(
+                    "차종 (선택)", key="revu_car",
+                    help="에어컨필터·와이퍼 등 차종이 들어가는 제품만. 비우면 차종 없이 진행.")
+            with col_p:
+                product_name = st.text_input("제품명", key="revu_product")
+            col_q, col_n = st.columns(2)
+            with col_q:
+                provide_qty = st.text_input(
+                    "제공수량 (예: EV5 에어컨필터 P17 2개)", key="revu_qty",
+                    help="제품 스펙 + 수량 단위(\"2개\" 등)까지 직접 입력하세요. 양식에 그대로 들어갑니다.")
+            with col_n:
+                recruit_count = st.number_input(
+                    "모집인원", min_value=1, max_value=999, step=1, key="revu_recruit")
 
     with tab_kw:
         # ── Step 4. 키워드 (+ 검색광고 연관키워드 추천) ──
-        st.subheader("키워드")
+        with st.container(border=True):
+            st.markdown("<div class='fsec'>키워드</div>", unsafe_allow_html=True)
 
-        with st.expander("🔍 키워드 추천 (검색광고 연관어 + 블로그 제목)", expanded=False):
-            st.caption(
-                "차종·제품 기반 ①검색광고 연관키워드(월검색량)와 ②블로그 글 제목 기반 키워드를 "
-                "함께 가져옵니다. 신차(예: EV5)는 연관어가 빈약해 블로그 제목으로 보완합니다. "
-                "체크 → 제목/본문 키워드 칸에 덧붙이기(중복 자동 제거). 제목 3개·본문 5개까지 권장."
-            )
-            # 차종·제품명이 있으면 "{차종} {제품}" 기본값 자동 채움(수정 가능).
-            _reco_default = " ".join(p for p in (car_model.strip(), product_name.strip()) if p)
-            reco_seed = st.text_input(
-                "추천 받을 검색어", value=_reco_default, key="revu_reco_seed",
-                help='예: "EV5 에어컨필터". 차종·제품 입력 시 자동 채움.')
-            if st.button("추천 받기", key="revu_reco_btn"):
-                _seed = reco_seed.strip()
-                if _seed:
-                    # ① 검색광고 연관어(현행) — 실패해도 ②블로그를 막지 않게 독립 try.
-                    try:
-                        st.session_state["revu_reco"] = _load_reco_keywords(_seed)
-                    except Exception as e:  # noqa: BLE001 — 원인 명시(429/키 미설정 등)
-                        st.error(f"검색광고 연관어 추천 실패: {type(e).__name__}: {e}")
-                    # ② 블로그 제목 기반(신규) — 실패 시 ★경고만(연관어는 그대로 살림).
-                    try:
-                        st.session_state["revu_blog_reco"] = _load_blog_reco(_seed)
-                    except Exception as e:  # noqa: BLE001
-                        st.session_state["revu_blog_reco"] = {
-                            "error": f"{type(e).__name__}: {e}"}
-                else:
-                    st.warning("검색어를 입력하세요.")
-
-            # ── 🤖 AI 키워드 자동완성(Claude) — 이미 입력된 차종·제품 사용 ──
-            st.markdown("**🤖 AI 키워드 자동완성**")
-            _ai_key = resolve_secret(_secret_candidates("ANTHROPIC_API_KEY"))
-            _ai_product = product_name.strip()
-            _ai_disabled = not (_ai_key and _ai_product)
-            if not _ai_key:
-                st.caption("⚠️ AI 자동완성을 쓰려면 Secrets 에 ANTHROPIC_API_KEY 가 필요합니다.")
-            elif not _ai_product:
-                st.caption("위 제품명을 입력하면 AI 자동완성을 쓸 수 있습니다(차종은 선택).")
-            else:
+            with st.expander("🔍 키워드 추천 (검색광고 연관어 + 블로그 제목)", expanded=False):
                 st.caption(
-                    f"‘{(car_model.strip() + ' ' + _ai_product).strip()}’ 기반 구매형 키워드를 "
-                    "Claude 가 생성합니다. 🟢구매형 우선 / 🟡중간 / 🔴정보형(접힘).")
-            if st.button("AI로 키워드 생성", key="revu_ai_btn", disabled=_ai_disabled):
-                try:
-                    st.session_state["revu_ai_reco"] = _load_ai_keywords(
-                        car_model.strip(), _ai_product)
-                except Exception as e:  # noqa: BLE001 — 키 미설정 등은 경고만(앱 유지)
-                    st.warning(f"AI 키워드 생성 실패: {type(e).__name__}: {e}")
+                    "차종·제품 기반 ①검색광고 연관키워드(월검색량)와 ②블로그 글 제목 기반 키워드를 "
+                    "함께 가져옵니다. 신차(예: EV5)는 연관어가 빈약해 블로그 제목으로 보완합니다. "
+                    "체크 → 제목/본문 키워드 칸에 덧붙이기(중복 자동 제거). 제목 3개·본문 5개까지 권장."
+                )
+                # 차종·제품명이 있으면 "{차종} {제품}" 기본값 자동 채움(수정 가능).
+                _reco_default = " ".join(p for p in (car_model.strip(), product_name.strip()) if p)
+                reco_seed = st.text_input(
+                    "추천 받을 검색어", value=_reco_default, key="revu_reco_seed",
+                    help='예: "EV5 에어컨필터". 차종·제품 입력 시 자동 채움.')
+                if st.button("추천 받기", key="revu_reco_btn"):
+                    _seed = reco_seed.strip()
+                    if _seed:
+                        # ① 검색광고 연관어(현행) — 실패해도 ②블로그를 막지 않게 독립 try.
+                        try:
+                            st.session_state["revu_reco"] = _load_reco_keywords(_seed)
+                        except Exception as e:  # noqa: BLE001 — 원인 명시(429/키 미설정 등)
+                            st.error(f"검색광고 연관어 추천 실패: {type(e).__name__}: {e}")
+                        # ② 블로그 제목 기반(신규) — 실패 시 ★경고만(연관어는 그대로 살림).
+                        try:
+                            st.session_state["revu_blog_reco"] = _load_blog_reco(_seed)
+                        except Exception as e:  # noqa: BLE001
+                            st.session_state["revu_blog_reco"] = {
+                                "error": f"{type(e).__name__}: {e}"}
+                    else:
+                        st.warning("검색어를 입력하세요.")
 
-            _ai = st.session_state.get("revu_ai_reco", {})
-            _ai_clean = _ai.get("clean", [])
-            _ai_excluded = _ai.get("excluded", [])
-            if _ai_clean:
-                _n_aichecked = sum(
-                    1 for kw, _ in _ai_clean if st.session_state.get(f"revu_ai_ck::{kw}"))
-                st.caption(f"AI 키워드 {len(_ai_clean)}개 · 선택 {_n_aichecked}개")
-                _render_reco_checkboxes(_ai_clean, "revu_ai_ck::", lambda v: "AI")
-                col_ait, col_aib = st.columns(2)
-                col_ait.button(
-                    "➕ 제목키워드에 추가", key="revu_ai_add_title",
-                    on_click=_add_ai_reco_to_field, args=("revu_titlekw",),
-                    help="제목키워드는 3개까지 권장.")
-                col_aib.button(
-                    "➕ 본문키워드에 추가", key="revu_ai_add_body",
-                    on_click=_add_ai_reco_to_field, args=("revu_bodykw",),
-                    help="본문키워드는 5개까지 권장.")
-                if _ai_excluded:
-                    st.caption("⚠️ 금지어 의심으로 제외됨: " + ", ".join(_ai_excluded))
-            elif "revu_ai_reco" in st.session_state:
-                st.info("AI 키워드가 없습니다(빈 결과). 제품명을 더 구체적으로 입력해 보세요.")
-
-            # ── ① 검색광고 연관키워드(현행) ──
-            st.markdown("**🔎 검색광고 연관키워드**")
-            _reco = st.session_state.get("revu_reco", {})
-            _clean = _reco.get("clean", [])
-            _excluded = _reco.get("excluded", [])
-            if _clean:
-                _n_checked = sum(
-                    1 for kw, _ in _clean if st.session_state.get(f"revu_reco_ck::{kw}"))
-                st.caption(
-                    f"연관 키워드 {len(_clean)}개 · 선택 {_n_checked}개 "
-                    "· 🟢구매형 우선 / 🟡중간 / 🔴정보형(접힘)")
-                _render_reco_checkboxes(
-                    _clean, "revu_reco_ck::", lambda v: f"검색량 {v:,}")
-                col_at, col_ab = st.columns(2)
-                col_at.button(
-                    "➕ 제목키워드에 추가", key="revu_add_title",
-                    on_click=_add_reco_to_field, args=("revu_titlekw",),
-                    help="제목키워드는 3개까지 권장.")
-                col_ab.button(
-                    "➕ 본문키워드에 추가", key="revu_add_body",
-                    on_click=_add_reco_to_field, args=("revu_bodykw",),
-                    help="본문키워드는 5개까지 권장.")
-                if _excluded:
-                    st.caption("⚠️ 금지어 의심으로 제외됨: " + ", ".join(_excluded))
-            elif "revu_reco" in st.session_state:
-                st.info("연관 키워드가 없습니다(검색량 0이거나 결과 없음). 신차라면 아래 블로그 제목을 참고하세요.")
-
-            # ── ② 블로그 제목 기반 키워드(신규) ──
-            st.markdown("**📝 블로그 제목 기반 키워드**")
-            _blog = st.session_state.get("revu_blog_reco", {})
-            if _blog.get("error"):
-                st.warning(
-                    "⚠️ 블로그 제목 추천을 가져오지 못했습니다(" + _blog["error"] + "). "
-                    "검색광고 연관어는 위에서 그대로 쓸 수 있습니다.")
-            _blog_kws = _blog.get("keywords", [])
-            _blog_titles = _blog.get("titles", [])
-            _blog_excluded = _blog.get("excluded", [])
-            # 제품 관련성 필터 결과 안내(차량 일반 글 제외됨).
-            _n_prod = _blog.get("n_product_titles")
-            _n_tot = _blog.get("n_total_titles")
-            if _n_tot and _n_prod is not None and _n_prod < _n_tot:
-                if _n_prod == 0:
-                    st.warning(
-                        "⚠️ 제품 관련 블로그 글을 찾지 못했습니다(신차 등으로 글이 적음). "
-                        "검색광고 연관어나 직접 입력을 활용하세요.")
+                # ── 🤖 AI 키워드 자동완성(Claude) — 이미 입력된 차종·제품 사용 ──
+                st.markdown("**🤖 AI 키워드 자동완성**")
+                _ai_key = resolve_secret(_secret_candidates("ANTHROPIC_API_KEY"))
+                _ai_product = product_name.strip()
+                _ai_disabled = not (_ai_key and _ai_product)
+                if not _ai_key:
+                    st.caption("⚠️ AI 자동완성을 쓰려면 Secrets 에 ANTHROPIC_API_KEY 가 필요합니다.")
+                elif not _ai_product:
+                    st.caption("위 제품명을 입력하면 AI 자동완성을 쓸 수 있습니다(차종은 선택).")
                 else:
                     st.caption(
-                        f"🎯 제품 관련 제목 {_n_prod}/{_n_tot}개에서만 키워드를 뽑았습니다"
-                        "(보조금·연비 등 차량 일반 글 제외).")
-            if _blog_kws:
-                _n_bchecked = sum(
-                    1 for kw, _ in _blog_kws if st.session_state.get(f"revu_blog_ck::{kw}"))
-                st.caption(
-                    f"제목에서 뽑은 키워드 {len(_blog_kws)}개 · 선택 {_n_bchecked}개 "
-                    "(괄호 = 등장 제목 수). 🟢구매형 우선 / 🟡중간 / 🔴정보형(접힘). "
-                    "형태소분석 없는 빈도 추출이라 노이즈가 있을 수 있어요.")
-                _render_reco_checkboxes(
-                    _blog_kws, "revu_blog_ck::", lambda v: f"제목 {v}개")
-                col_bt, col_bb = st.columns(2)
-                col_bt.button(
-                    "➕ 제목키워드에 추가", key="revu_blog_add_title",
-                    on_click=_add_blog_reco_to_field, args=("revu_titlekw",),
-                    help="제목키워드는 3개까지 권장.")
-                col_bb.button(
-                    "➕ 본문키워드에 추가", key="revu_blog_add_body",
-                    on_click=_add_blog_reco_to_field, args=("revu_bodykw",),
-                    help="본문키워드는 5개까지 권장.")
-                if _blog_excluded:
-                    st.caption("⚠️ 금지어 의심으로 제외됨: " + ", ".join(_blog_excluded))
-            elif "revu_blog_reco" in st.session_state and not _blog.get("error"):
-                st.info("블로그 제목에서 뽑을 키워드가 없습니다(검색 결과 없음).")
+                        f"‘{(car_model.strip() + ' ' + _ai_product).strip()}’ 기반 구매형 키워드를 "
+                        "Claude 가 생성합니다. 🟢구매형 우선 / 🟡중간 / 🔴정보형(접힘).")
+                if st.button("AI로 키워드 생성", key="revu_ai_btn", disabled=_ai_disabled):
+                    try:
+                        st.session_state["revu_ai_reco"] = _load_ai_keywords(
+                            car_model.strip(), _ai_product)
+                    except Exception as e:  # noqa: BLE001 — 키 미설정 등은 경고만(앱 유지)
+                        st.warning(f"AI 키워드 생성 실패: {type(e).__name__}: {e}")
 
-            # 실제 블로그 제목 원문 — 시경이 직접 참고(접어서 표시).
-            if _blog_titles:
-                with st.expander(f"📰 이런 블로그 제목들이 있습니다 ({len(_blog_titles)}개)", expanded=False):
-                    for t in _blog_titles:
-                        st.markdown(f"- {t}")
+                _ai = st.session_state.get("revu_ai_reco", {})
+                _ai_clean = _ai.get("clean", [])
+                _ai_excluded = _ai.get("excluded", [])
+                if _ai_clean:
+                    _n_aichecked = sum(
+                        1 for kw, _ in _ai_clean if st.session_state.get(f"revu_ai_ck::{kw}"))
+                    st.caption(f"AI 키워드 {len(_ai_clean)}개 · 선택 {_n_aichecked}개")
+                    _render_reco_checkboxes(_ai_clean, "revu_ai_ck::", lambda v: "AI")
+                    col_ait, col_aib = st.columns(2)
+                    col_ait.button(
+                        "➕ 제목키워드에 추가", key="revu_ai_add_title",
+                        on_click=_add_ai_reco_to_field, args=("revu_titlekw",),
+                        help="제목키워드는 3개까지 권장.")
+                    col_aib.button(
+                        "➕ 본문키워드에 추가", key="revu_ai_add_body",
+                        on_click=_add_ai_reco_to_field, args=("revu_bodykw",),
+                        help="본문키워드는 5개까지 권장.")
+                    if _ai_excluded:
+                        st.caption("⚠️ 금지어 의심으로 제외됨: " + ", ".join(_ai_excluded))
+                elif "revu_ai_reco" in st.session_state:
+                    st.info("AI 키워드가 없습니다(빈 결과). 제품명을 더 구체적으로 입력해 보세요.")
 
-        col_tk, col_bk = st.columns(2)
-        with col_tk:
-            title_keywords = st.text_area(
-                "제목키워드 (1~3개, 콤마 구분)", key="revu_titlekw", height=80)
-        with col_bk:
-            body_keywords = st.text_area(
-                "본문키워드 (3~5개, 콤마 구분)", key="revu_bodykw", height=80)
+                # ── ① 검색광고 연관키워드(현행) ──
+                st.markdown("**🔎 검색광고 연관키워드**")
+                _reco = st.session_state.get("revu_reco", {})
+                _clean = _reco.get("clean", [])
+                _excluded = _reco.get("excluded", [])
+                if _clean:
+                    _n_checked = sum(
+                        1 for kw, _ in _clean if st.session_state.get(f"revu_reco_ck::{kw}"))
+                    st.caption(
+                        f"연관 키워드 {len(_clean)}개 · 선택 {_n_checked}개 "
+                        "· 🟢구매형 우선 / 🟡중간 / 🔴정보형(접힘)")
+                    _render_reco_checkboxes(
+                        _clean, "revu_reco_ck::", lambda v: f"검색량 {v:,}")
+                    col_at, col_ab = st.columns(2)
+                    col_at.button(
+                        "➕ 제목키워드에 추가", key="revu_add_title",
+                        on_click=_add_reco_to_field, args=("revu_titlekw",),
+                        help="제목키워드는 3개까지 권장.")
+                    col_ab.button(
+                        "➕ 본문키워드에 추가", key="revu_add_body",
+                        on_click=_add_reco_to_field, args=("revu_bodykw",),
+                        help="본문키워드는 5개까지 권장.")
+                    if _excluded:
+                        st.caption("⚠️ 금지어 의심으로 제외됨: " + ", ".join(_excluded))
+                elif "revu_reco" in st.session_state:
+                    st.info("연관 키워드가 없습니다(검색량 0이거나 결과 없음). 신차라면 아래 블로그 제목을 참고하세요.")
 
-        # 금지어 가벼운 경고(질병명·절대표현). 완벽한 필터 아님 — 경고만.
-        banned = find_banned_words(title_keywords, body_keywords, campaign_title, campaign_subtitle)
-        if banned:
-            st.warning(
-                "⚠️ 금지어/절대표현 의심: **" + ", ".join(banned) + "** — 양식 규칙상 제외하세요.\n\n"
-                "※ 타브랜드·연예인명은 자동 판별이 어려우니 직접 확인 바랍니다."
-            )
+                # ── ② 블로그 제목 기반 키워드(신규) ──
+                st.markdown("**📝 블로그 제목 기반 키워드**")
+                _blog = st.session_state.get("revu_blog_reco", {})
+                if _blog.get("error"):
+                    st.warning(
+                        "⚠️ 블로그 제목 추천을 가져오지 못했습니다(" + _blog["error"] + "). "
+                        "검색광고 연관어는 위에서 그대로 쓸 수 있습니다.")
+                _blog_kws = _blog.get("keywords", [])
+                _blog_titles = _blog.get("titles", [])
+                _blog_excluded = _blog.get("excluded", [])
+                # 제품 관련성 필터 결과 안내(차량 일반 글 제외됨).
+                _n_prod = _blog.get("n_product_titles")
+                _n_tot = _blog.get("n_total_titles")
+                if _n_tot and _n_prod is not None and _n_prod < _n_tot:
+                    if _n_prod == 0:
+                        st.warning(
+                            "⚠️ 제품 관련 블로그 글을 찾지 못했습니다(신차 등으로 글이 적음). "
+                            "검색광고 연관어나 직접 입력을 활용하세요.")
+                    else:
+                        st.caption(
+                            f"🎯 제품 관련 제목 {_n_prod}/{_n_tot}개에서만 키워드를 뽑았습니다"
+                            "(보조금·연비 등 차량 일반 글 제외).")
+                if _blog_kws:
+                    _n_bchecked = sum(
+                        1 for kw, _ in _blog_kws if st.session_state.get(f"revu_blog_ck::{kw}"))
+                    st.caption(
+                        f"제목에서 뽑은 키워드 {len(_blog_kws)}개 · 선택 {_n_bchecked}개 "
+                        "(괄호 = 등장 제목 수). 🟢구매형 우선 / 🟡중간 / 🔴정보형(접힘). "
+                        "형태소분석 없는 빈도 추출이라 노이즈가 있을 수 있어요.")
+                    _render_reco_checkboxes(
+                        _blog_kws, "revu_blog_ck::", lambda v: f"제목 {v}개")
+                    col_bt, col_bb = st.columns(2)
+                    col_bt.button(
+                        "➕ 제목키워드에 추가", key="revu_blog_add_title",
+                        on_click=_add_blog_reco_to_field, args=("revu_titlekw",),
+                        help="제목키워드는 3개까지 권장.")
+                    col_bb.button(
+                        "➕ 본문키워드에 추가", key="revu_blog_add_body",
+                        on_click=_add_blog_reco_to_field, args=("revu_bodykw",),
+                        help="본문키워드는 5개까지 권장.")
+                    if _blog_excluded:
+                        st.caption("⚠️ 금지어 의심으로 제외됨: " + ", ".join(_blog_excluded))
+                elif "revu_blog_reco" in st.session_state and not _blog.get("error"):
+                    st.info("블로그 제목에서 뽑을 키워드가 없습니다(검색 결과 없음).")
+
+                # 실제 블로그 제목 원문 — 시경이 직접 참고(접어서 표시).
+                if _blog_titles:
+                    with st.expander(f"📰 이런 블로그 제목들이 있습니다 ({len(_blog_titles)}개)", expanded=False):
+                        for t in _blog_titles:
+                            st.markdown(f"- {t}")
+
+            col_tk, col_bk = st.columns(2)
+            with col_tk:
+                title_keywords = st.text_area(
+                    "제목키워드 (1~3개, 콤마 구분)", key="revu_titlekw", height=80)
+            with col_bk:
+                body_keywords = st.text_area(
+                    "본문키워드 (3~5개, 콤마 구분)", key="revu_bodykw", height=80)
+
+            # 금지어 가벼운 경고(질병명·절대표현). 완벽한 필터 아님 — 경고만.
+            banned = find_banned_words(title_keywords, body_keywords, campaign_title, campaign_subtitle)
+            if banned:
+                st.warning(
+                    "⚠️ 금지어/절대표현 의심: **" + ", ".join(banned) + "** — 양식 규칙상 제외하세요.\n\n"
+                    "※ 타브랜드·연예인명은 자동 판별이 어려우니 직접 확인 바랍니다."
+                )
 
     with tab_link:
         # ── Step 5. 제품링크 (+ 네이버 유입 추적 URL 생성) ──
-        st.subheader("제품 링크")
-        product_url = st.text_input(
-            "제품링크 URL", key="revu_url",
-            help="아래 '네이버 유입 추적 URL 생성'으로 만든 URL을 여기에 바로 넣을 수 있습니다.")
+        with st.container(border=True):
+            st.markdown("<div class='fsec'>제품 링크</div>", unsafe_allow_html=True)
+            product_url = st.text_input(
+                "제품링크 URL", key="revu_url",
+                help="아래 '네이버 유입 추적 URL 생성'으로 만든 URL을 여기에 바로 넣을 수 있습니다.")
 
-        with st.expander("🔗 네이버 유입 추적 URL 생성 (nt_)", expanded=False):
-            st.caption(
-                "제품 URL + 추적 파라미터를 조립합니다(단축 없음). "
-                "nt_source·nt_medium 은 영문/숫자/-,_,. 만(한글·공백 금지, 필수). "
-                'URL 에 이미 "?"가 있으면 자동으로 "&"로 이어붙입니다.'
-            )
-            track_base = st.text_input(
-                "제품 URL", key="revu_track_base",
-                help="예: https://m.site.naver.com/2aAvQ 또는 스마트스토어 URL")
-            recruit_date = st.date_input("체험단 모집 요청일", key="revu_recruit_date")
-            _yymmdd = recruit_date.strftime("%y%m%d") if recruit_date else ""
-            col_s, col_m = st.columns(2)
-            with col_s:
-                nt_source = st.text_input("nt_source (필수)", key="revu_nt_source")
-            with col_m:
-                # 대문자 강제(소문자 혼입 방지) — 표시·집계 일관성.
-                nt_medium = st.text_input(
-                    "nt_medium (필수)", key="revu_nt_medium",
-                    help="N_ 접두사 + 대문자 고정(예: N_REVU). 자동 대문자화됨.").upper()
-            col_d, col_k = st.columns(2)
-            with col_d:
-                nt_detail = st.text_input(
-                    "nt_detail (선택)", key="revu_nt_detail",
-                    help="규칙: 날짜_제품_차종. 아래 버튼으로 자동 조립(이후 수정 가능).")
-                st.button(
-                    "📋 규칙대로 자동 조립(날짜_제품_차종)", key="revu_nt_detail_auto",
-                    on_click=_apply_nt_detail, args=(_yymmdd, product_name, car_model),
-                    help=f"{_yymmdd}_제품_차종 형식으로 nt_detail 을 채웁니다.")
-            with col_k:
-                nt_keyword = st.text_input(
-                    "nt_keyword (선택)", key="revu_nt_keyword",
-                    help="상품번호 = 어떤 링크를 줬는지 식별. 아래 버튼으로 URL에서 추출.")
-                st.button(
-                    "🔗 URL에서 상품번호 추출", key="revu_nt_kw_from_url",
-                    on_click=_apply_product_no, args=(track_base,),
-                    help="제품 URL의 /products/숫자 에서 상품번호를 nt_keyword 로 채웁니다.")
-            _pno_msg = st.session_state.get("_revu_pno_msg")
-            if _pno_msg:
-                if _pno_msg[0] == "ok":
-                    st.caption(f"✅ 상품번호 {_pno_msg[1]} 추출됨.")
-                else:
-                    st.caption("⚠️ URL에서 상품번호(/products/숫자)를 찾지 못했습니다.")
-
-            track_url, track_errors = assemble_tracking_url(
-                track_base, nt_source, nt_medium, nt_detail, nt_keyword)
-            if track_errors:
-                for e in track_errors:
-                    st.markdown(
-                        f'<span style="color:#dc2626;font-size:12.5px;">⚠️ {e}</span>',
-                        unsafe_allow_html=True,
-                    )
-            if track_url:
-                st.code(track_url, language="text")
-                parts = [f"nt_source={nt_source}", f"nt_medium={nt_medium}"]
-                if nt_detail:
-                    parts.append(f"nt_detail={nt_detail}")
-                if nt_keyword:
-                    parts.append(f"nt_keyword={nt_keyword}")
-                st.caption(" · ".join(parts))
-                st.button(
-                    "⬇️ 이 URL을 제품링크 칸에 넣기",
-                    key="revu_apply_track",
-                    on_click=_apply_tracking_url, args=(track_url,),
+            with st.expander("🔗 네이버 유입 추적 URL 생성 (nt_)", expanded=False):
+                st.caption(
+                    "제품 URL + 추적 파라미터를 조립합니다(단축 없음). "
+                    "nt_source·nt_medium 은 영문/숫자/-,_,. 만(한글·공백 금지, 필수). "
+                    'URL 에 이미 "?"가 있으면 자동으로 "&"로 이어붙입니다.'
                 )
+                track_base = st.text_input(
+                    "제품 URL", key="revu_track_base",
+                    help="예: https://m.site.naver.com/2aAvQ 또는 스마트스토어 URL")
+                recruit_date = st.date_input("체험단 모집 요청일", key="revu_recruit_date")
+                _yymmdd = recruit_date.strftime("%y%m%d") if recruit_date else ""
+                col_s, col_m = st.columns(2)
+                with col_s:
+                    nt_source = st.text_input("nt_source (필수)", key="revu_nt_source")
+                with col_m:
+                    # 대문자 강제(소문자 혼입 방지) — 표시·집계 일관성.
+                    nt_medium = st.text_input(
+                        "nt_medium (필수)", key="revu_nt_medium",
+                        help="N_ 접두사 + 대문자 고정(예: N_REVU). 자동 대문자화됨.").upper()
+                col_d, col_k = st.columns(2)
+                with col_d:
+                    nt_detail = st.text_input(
+                        "nt_detail (선택)", key="revu_nt_detail",
+                        help="규칙: 날짜_제품_차종. 아래 버튼으로 자동 조립(이후 수정 가능).")
+                    st.button(
+                        "📋 규칙대로 자동 조립(날짜_제품_차종)", key="revu_nt_detail_auto",
+                        on_click=_apply_nt_detail, args=(_yymmdd, product_name, car_model),
+                        help=f"{_yymmdd}_제품_차종 형식으로 nt_detail 을 채웁니다.")
+                with col_k:
+                    nt_keyword = st.text_input(
+                        "nt_keyword (선택)", key="revu_nt_keyword",
+                        help="상품번호 = 어떤 링크를 줬는지 식별. 아래 버튼으로 URL에서 추출.")
+                    st.button(
+                        "🔗 URL에서 상품번호 추출", key="revu_nt_kw_from_url",
+                        on_click=_apply_product_no, args=(track_base,),
+                        help="제품 URL의 /products/숫자 에서 상품번호를 nt_keyword 로 채웁니다.")
+                _pno_msg = st.session_state.get("_revu_pno_msg")
+                if _pno_msg:
+                    if _pno_msg[0] == "ok":
+                        st.caption(f"✅ 상품번호 {_pno_msg[1]} 추출됨.")
+                    else:
+                        st.caption("⚠️ URL에서 상품번호(/products/숫자)를 찾지 못했습니다.")
 
-                # ── URL 이력 저장(구글시트) — ★별도 기능, 실패해도 위 URL 생성엔 영향 없음 ──
-                _log_no = (st.session_state.get("revu_nt_keyword")
-                           or extract_product_no(track_base) or "")
-                col_lg, col_lv = st.columns(2)
-                if col_lg.button("📝 이 URL 이력 저장 (구글시트)", key="revu_log_save"):
-                    _status = append_url_log(
-                        product_code=product_code_kr(product_name), car=car_model.strip(),
-                        product_no=_log_no, medium=nt_medium, detail=nt_detail, url=track_url)
-                    if _status == "saved":
-                        st.success("이력 저장됨")
-                    elif _status == "duplicate":
-                        st.info("이미 저장된 URL입니다")
-                    elif _status == "no_config":
-                        st.warning("로그 시트 ID 미설정(Secrets url_log_sheet_id). URL은 정상.")
-                    else:
-                        st.warning("이력 저장 실패(시트 공유·권한 확인). URL 생성엔 영향 없음.")
-                if col_lv.button("📜 최근 저장 이력 보기", key="revu_log_view"):
-                    st.session_state["revu_log_rows"] = fetch_recent_logs(10)
-                _log_rows = st.session_state.get("revu_log_rows")
-                if _log_rows is not None:
-                    if _log_rows:
-                        st.dataframe(
-                            [dict(zip(LOG_HEADER, r)) for r in _log_rows],
-                            use_container_width=True, hide_index=True)
-                    else:
-                        st.caption("이력 없음(또는 시트 미설정).")
-            else:
-                st.info("필수값(제품 URL·nt_source·nt_medium)을 채우면 추적 URL이 생성됩니다.")
+                track_url, track_errors = assemble_tracking_url(
+                    track_base, nt_source, nt_medium, nt_detail, nt_keyword)
+                if track_errors:
+                    for e in track_errors:
+                        st.markdown(
+                            f'<span style="color:#dc2626;font-size:12.5px;">⚠️ {e}</span>',
+                            unsafe_allow_html=True,
+                        )
+                if track_url:
+                    st.code(track_url, language="text")
+                    parts = [f"nt_source={nt_source}", f"nt_medium={nt_medium}"]
+                    if nt_detail:
+                        parts.append(f"nt_detail={nt_detail}")
+                    if nt_keyword:
+                        parts.append(f"nt_keyword={nt_keyword}")
+                    st.caption(" · ".join(parts))
+                    st.button(
+                        "⬇️ 이 URL을 제품링크 칸에 넣기",
+                        key="revu_apply_track",
+                        on_click=_apply_tracking_url, args=(track_url,),
+                    )
+
+                    # ── URL 이력 저장(구글시트) — ★별도 기능, 실패해도 위 URL 생성엔 영향 없음 ──
+                    _log_no = (st.session_state.get("revu_nt_keyword")
+                               or extract_product_no(track_base) or "")
+                    col_lg, col_lv = st.columns(2)
+                    if col_lg.button("📝 이 URL 이력 저장 (구글시트)", key="revu_log_save"):
+                        _status = append_url_log(
+                            product_code=product_code_kr(product_name), car=car_model.strip(),
+                            product_no=_log_no, medium=nt_medium, detail=nt_detail, url=track_url)
+                        if _status == "saved":
+                            st.success("이력 저장됨")
+                        elif _status == "duplicate":
+                            st.info("이미 저장된 URL입니다")
+                        elif _status == "no_config":
+                            st.warning("로그 시트 ID 미설정(Secrets url_log_sheet_id). URL은 정상.")
+                        else:
+                            st.warning("이력 저장 실패(시트 공유·권한 확인). URL 생성엔 영향 없음.")
+                    if col_lv.button("📜 최근 저장 이력 보기", key="revu_log_view"):
+                        st.session_state["revu_log_rows"] = fetch_recent_logs(10)
+                    _log_rows = st.session_state.get("revu_log_rows")
+                    if _log_rows is not None:
+                        if _log_rows:
+                            st.dataframe(
+                                [dict(zip(LOG_HEADER, r)) for r in _log_rows],
+                                use_container_width=True, hide_index=True)
+                        else:
+                            st.caption("이력 없음(또는 시트 미설정).")
+                else:
+                    st.info("필수값(제품 URL·nt_source·nt_medium)을 채우면 추적 URL이 생성됩니다.")
 
     with tab_mission:
         # ── Step 6. 미션 (각도 선택 → 실데이터 기반 5단 미션 자동 채움, 수정 가능) ──
-        st.subheader(f"{content_type} 미션")
-        # 차종 필수 제품은 차종 입력 시, 차종 불필요 제품(자전거 펌프 등)은 항상 UI 표시.
-        if car_model.strip() or not mission_requires_car(product_name):
-            _angles = mission_angles(product_name)
-            _angle_labels = [lab for _key, lab in _angles]
-            # 제품군이 바뀌면 이전 라벨이 새 옵션에 없을 수 있어 초기화(StreamlitAPIException 방지).
-            if st.session_state.get("revu_mission_angle") not in _angle_labels:
-                st.session_state["revu_mission_angle"] = _angle_labels[0]
-            col_ang, col_btn = st.columns([2, 1])
-            with col_ang:
-                st.selectbox(
-                    "미션 각도 선택", _angle_labels, key="revu_mission_angle",
-                    help="제품 특성에 맞는 후기 각도. 고르고 옆 버튼을 누르면 미션이 채워집니다.")
-            with col_btn:
-                st.button(
-                    "✨ 선택한 각도로 미션 채우기", key="revu_fill_missions",
-                    on_click=_apply_mission_block, args=(car_model, product_name),
-                    help="기존 미션을 덮어씁니다. 다른 각도로 다시 누르면 다시 채워집니다.")
-            st.caption(
-                "각도를 고르고 채우면 5단 미션이 자동 작성됩니다. [필수 언급] 칸의 셀링포인트는 "
-                "실제 제품 사실로 꼭 확인·수정하세요(AI가 채우지 않음).")
-        missions = []
-        for i in range(3):
-            missions.append(st.text_area(f"미션 {i + 1}", key=f"revu_mission_{i}", height=70))
+        with st.container(border=True):
+            st.markdown(f"<div class='fsec'>{content_type} 미션</div>", unsafe_allow_html=True)
+            # 차종 필수 제품은 차종 입력 시, 차종 불필요 제품(자전거 펌프 등)은 항상 UI 표시.
+            if car_model.strip() or not mission_requires_car(product_name):
+                _angles = mission_angles(product_name)
+                _angle_labels = [lab for _key, lab in _angles]
+                # 제품군이 바뀌면 이전 라벨이 새 옵션에 없을 수 있어 초기화(StreamlitAPIException 방지).
+                if st.session_state.get("revu_mission_angle") not in _angle_labels:
+                    st.session_state["revu_mission_angle"] = _angle_labels[0]
+                col_ang, col_btn = st.columns([2, 1])
+                with col_ang:
+                    st.selectbox(
+                        "미션 각도 선택", _angle_labels, key="revu_mission_angle",
+                        help="제품 특성에 맞는 후기 각도. 고르고 옆 버튼을 누르면 미션이 채워집니다.")
+                with col_btn:
+                    st.button(
+                        "✨ 선택한 각도로 미션 채우기", key="revu_fill_missions",
+                        on_click=_apply_mission_block, args=(car_model, product_name),
+                        help="기존 미션을 덮어씁니다. 다른 각도로 다시 누르면 다시 채워집니다.")
+                st.caption(
+                    "각도를 고르고 채우면 5단 미션이 자동 작성됩니다. [필수 언급] 칸의 셀링포인트는 "
+                    "실제 제품 사실로 꼭 확인·수정하세요(AI가 채우지 않음).")
+            missions = []
+            for i in range(3):
+                missions.append(st.text_area(f"미션 {i + 1}", key=f"revu_mission_{i}", height=70))
 
-        # ── Step 7. 담당자 (기본값 자동 채움, 수정 가능) ──
-        st.subheader("담당자 정보")
-        col_m1, col_m2, col_m3 = st.columns(3)
-        with col_m1:
-            manager_name = st.text_input("성함", key="revu_mgr_name")
-        with col_m2:
-            manager_phone = st.text_input("연락처", key="revu_mgr_phone")
-        with col_m3:
-            manager_email = st.text_input("이메일", key="revu_mgr_email")
+            # ── Step 7. 담당자 (기본값 자동 채움, 수정 가능) ──
+        with st.container(border=True):
+            st.markdown("<div class='fsec'>담당자 정보</div>", unsafe_allow_html=True)
+            col_m1, col_m2, col_m3 = st.columns(3)
+            with col_m1:
+                manager_name = st.text_input("성함", key="revu_mgr_name")
+            with col_m2:
+                manager_phone = st.text_input("연락처", key="revu_mgr_phone")
+            with col_m3:
+                manager_email = st.text_input("이메일", key="revu_mgr_email")
 
     data = RevuFormData(
         content_type=content_type,
@@ -2134,16 +2165,61 @@ def _won(n: float) -> str:
     return f"₩{int(round(n)):,}"
 
 
-def _sfx14(d: dict) -> str:
-    """+14일 기여도추정 보조 표기(작은 회색) — 메인(마지막클릭) 뒤에 덧붙임."""
-    return (
-        " <span style='color:#64748b;font-size:12px;'>"
-        f"(+14일 결제 {int(round(d.get('pay14', 0))):,}·{_won(d.get('amount14', 0))})"
-        "</span>")
+# 성과표 스타일 — 우리 클래스(cap-*)라 Streamlit 업데이트에도 안 깨짐. 화면 상단 1회 출력.
+_CAP_TBL_CSS = """<style>
+.cap-tbl{width:100%;border-collapse:collapse;background:#fff;border:1px solid #DCE5F0;
+  border-radius:10px;overflow:hidden;margin:2px 0 8px}
+.cap-tbl th{font-size:12px;font-weight:500;color:#6B7785;text-align:right;padding:9px 12px;
+  border-bottom:1px solid #D3DEEC;background:#F2F5FA;white-space:nowrap}
+.cap-tbl th:first-child{text-align:left}
+.cap-tbl th.s14,.cap-tbl td.s14{color:#94a3b8;font-size:12px}
+.cap-tbl td{font-size:13px;padding:10px 12px;border-bottom:1px solid #EDF1F7;text-align:right;
+  font-variant-numeric:tabular-nums;color:#1F2933;white-space:nowrap}
+.cap-tbl tr:last-child td{border-bottom:none}
+.cap-tbl td:first-child{text-align:left;font-weight:500}
+.cap-bar{display:flex;align-items:center;gap:8px;justify-content:flex-end}
+.cap-track{width:52px;height:7px;border-radius:4px;background:#E3E9F2;overflow:hidden;flex:none}
+.cap-fill{display:block;height:100%;border-radius:4px}
+.cap-rate{font-weight:600;min-width:42px;display:inline-block;text-align:right}
+.cap-bd{font-size:12px;margin-right:5px}
+</style>"""
+
+
+def _perf_table_html(items, name_key, name_label, *, with_badge=False):
+    """성과 집계(items)를 정렬·색막대 포함 HTML 표로. 숫자·색은 기존과 동일(표시만)."""
+    if not items:
+        return ""
+    rows = []
+    for it in items:
+        rate = it["rate"]
+        color = _rate_color(rate)
+        w = min(rate / PERF_GOOD_RATE * 100, 100) if PERF_GOOD_RATE else 0  # 15%↑=꽉찬막대
+        nm = html.escape(str(it.get(name_key) or "(미지정)"))
+        bd = ""
+        if with_badge:
+            t = it.get("tag", "")
+            if t == "good":
+                bd = "<span class='cap-bd' style='color:#16a34a'>★</span>"
+            elif t == "bad":
+                bd = "<span class='cap-bd' style='color:#dc2626'>⚠</span>"
+        rows.append(
+            f"<tr><td>{bd}{nm}</td>"
+            f"<td>{int(round(it['inflow'])):,}</td><td>{int(round(it['pay'])):,}</td>"
+            f"<td><div class='cap-bar'><span class='cap-track'>"
+            f"<span class='cap-fill' style='width:{w:.0f}%;background:{color}'></span></span>"
+            f"<span class='cap-rate' style='color:{color}'>{round(rate, 1)}%</span></div></td>"
+            f"<td>{_won(it['amount'])}</td>"
+            f"<td class='s14'>{int(round(it.get('pay14', 0))):,}</td>"
+            f"<td class='s14'>{_won(it.get('amount14', 0))}</td></tr>")
+    return ("<table class='cap-tbl'><thead><tr>"
+            f"<th>{name_label}</th><th>유입</th><th>결제</th><th>결제율</th><th>결제금액</th>"
+            "<th class='s14'>+14결제</th><th class='s14'>+14금액</th>"
+            "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>")
 
 
 def render_campaign_analytics() -> None:
     st.title("체험단 성과 분석")
+    st.markdown(_CAP_TBL_CSS, unsafe_allow_html=True)
     st.caption(
         "스마트스토어 마케팅분석 표를 복사해 아래에 붙여넣고 [분석]을 누르세요. "
         "nt_ 추적 파라미터 기준으로 매체·캠페인·제품별 성과와 데이터 품질을 집계합니다."
@@ -2185,41 +2261,28 @@ def render_campaign_analytics() -> None:
     else:
         st.success("규칙 위반 없음")
 
-    # 3) 매체 통합 집계
-    st.subheader("매체 통합 집계")
+    # 3) 매체별 성과 (정렬·색막대 HTML 표)
+    st.subheader("매체별 성과")
     if result["by_medium"]:
-        for m in result["by_medium"]:
-            color = _rate_color(m["rate"])
-            st.markdown(
-                f"**{m['medium']}** · 유입 {int(round(m['inflow'])):,} · "
-                f"결제 {int(round(m['pay'])):,} · "
-                f"<span style='color:{color};font-weight:700;'>결제율 "
-                f"{round(m['rate'], 1)}%</span> · {_won(m['amount'])}{_sfx14(m)}",
-                unsafe_allow_html=True)
+        st.markdown(
+            _perf_table_html(result["by_medium"], "medium", "매체"),
+            unsafe_allow_html=True)
     else:
         st.caption("매체 데이터가 없습니다(모바일/PC 행 없음).")
 
-    # 4) 캠페인별 성과
+    # 4) 캠페인별 성과 (★good/⚠bad 뱃지)
     st.subheader("캠페인별 성과")
-    for camp in result["by_campaign"]:
-        badge = {"good": "★", "bad": "⚠️"}.get(camp["tag"], "")
-        name = camp["campaign"] or "(detail 없음)"
+    if result["by_campaign"]:
         st.markdown(
-            f"{badge} **{name}** · 유입 {int(round(camp['inflow'])):,} · "
-            f"결제 {int(round(camp['pay'])):,} · 결제율 {round(camp['rate'], 1)}% · "
-            f"{_won(camp['amount'])}{_sfx14(camp)}",
+            _perf_table_html(result["by_campaign"], "campaign", "캠페인", with_badge=True),
             unsafe_allow_html=True)
-        st.progress(min(int(round(camp["rate"])), 100))
 
     # 5) 제품별 성과(신규 detail 규칙 적용 시에만 등장)
     if result["by_product"]:
         st.subheader("제품별 성과")
-        for p in result["by_product"]:
-            st.markdown(
-                f"**{p['product']}** · 유입 {int(round(p['inflow'])):,} · "
-                f"결제 {int(round(p['pay'])):,} · 결제율 {round(p['rate'], 1)}% · "
-                f"{_won(p['amount'])}{_sfx14(p)}",
-                unsafe_allow_html=True)
+        st.markdown(
+            _perf_table_html(result["by_product"], "product", "제품"),
+            unsafe_allow_html=True)
 
     # 엑셀 다운로드(원본붙여넣기 + 분석결과 2시트, 결제율 표시/정확 두 칸).
     st.divider()
@@ -2243,6 +2306,9 @@ _SCREEN = st.sidebar.radio(
     key="_screen_select",
 )
 st.sidebar.divider()
+
+# 전 화면 공통 색감(흰 카드·청회색 배경·파란 포인트) — 화면 분기 전 1회 주입.
+_inject_global_css()
 
 if _SCREEN == "차종 수요":
     render_car_demand()

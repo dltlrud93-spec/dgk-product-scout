@@ -360,6 +360,71 @@ def test_render_campaign_analytics_with_result():
     assert "대소문자" in warns
 
 
+def _analytics_html(**result_extra):
+    """성과분석 화면을 렌더하고 표 HTML(markdown blob)을 돌려준다."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "체험단 성과 분석"
+    base = {
+        "summary": {"inflow": 0, "pay": 0, "pay_rate": 0, "amount": 0, "amount14": 0},
+        "by_medium": [], "by_campaign": [], "by_product": [], "warnings": [],
+    }
+    base.update(result_extra)
+    at.session_state["ca_result"] = base
+    at.run()
+    assert not at.exception, f"성과표 렌더 예외: {at.exception}"
+    return at, " ".join(m.value for m in at.markdown)
+
+
+def test_perf_table_html_badges_colors_and_bar_width():
+    """_perf_table_html: 뱃지(★/⚠)·결제율 색·막대 width(rate/15*100, 100 클램프)·콤마."""
+    at, blob = _analytics_html(
+        by_medium=[
+            # rate=15 → green #16a34a, width 100% ; rate=7.5 → mid #334155, width 50%
+            {"medium": "blog", "inflow": 1234, "pay": 185, "rate": 15.0,
+             "amount": 1000000, "pay14": 200, "amount14": 1100000},
+            {"medium": "revu", "inflow": 100, "pay": 7, "rate": 7.5,
+             "amount": 50000, "pay14": 8, "amount14": 55000},
+            # rate=30 → green, width 클램프 100% (15 초과여도 100 넘지 않음)
+            {"medium": "cafe", "inflow": 50, "pay": 15, "rate": 30.0,
+             "amount": 30000, "pay14": 16, "amount14": 33000},
+        ],
+        by_campaign=[
+            {"campaign": "good_camp", "inflow": 10, "pay": 3, "rate": 30.0,
+             "amount": 9000, "tag": "good"},
+            {"campaign": "bad_camp", "inflow": 10, "pay": 0, "rate": 2.0,
+             "amount": 0, "tag": "bad"},
+        ],
+    )
+    # ① good→★ 초록 / bad→⚠ 빨강 (뱃지 색)
+    assert "★" in blob and "#16a34a" in blob
+    assert "⚠" in blob and "#dc2626" in blob
+    # ② 결제율 색: 15%↑ 초록 / 5~15 중간(#334155) / 5%미만 빨강
+    assert "#334155" in blob          # rate 7.5 (중간)
+    # ③ 막대 width 정확: 15→100, 7.5→50, 30→100(클램프)
+    assert "width:100%" in blob and "width:50%" in blob
+    # ④ +14열 헤더 + pay14/amount14 콤마 포맷
+    assert "+14결제" in blob and "+14금액" in blob
+    assert "1,100,000" in blob        # amount14 콤마
+    # ⑤ 유입/결제 콤마 포맷
+    assert "1,234" in blob
+
+
+def test_perf_table_html_escapes_names_and_empty():
+    """이름 html.escape 적용 + 빈 리스트 섹션은 표가 없다(캡션만)."""
+    at, blob = _analytics_html(
+        by_medium=[{"medium": "a & b", "inflow": 1, "pay": 0, "rate": 1.0,
+                    "amount": 0, "pay14": 0, "amount14": 0}],
+    )
+    assert "a &amp; b" in blob        # & → &amp; (XSS·깨짐 방지)
+    # by_campaign 비어있음 → 캠페인 표 markdown 미출력(빈 문자열은 렌더 안 함)
+    assert "cap-tbl" in blob          # 매체 표는 존재
+    # 빈 by_medium 이면 안내 캡션
+    at2, blob2 = _analytics_html(by_medium=[])
+    caps = " ".join(c.value for c in at2.caption)
+    assert "매체 데이터가 없습니다" in caps
+
+
 # ── 저장/불러오기 실제 렌더 경로 ─────────────────────────────────────────────
 
 def test_render_has_save_and_docx_download_buttons():
