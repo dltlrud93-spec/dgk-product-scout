@@ -240,95 +240,168 @@ def parse_smartstore_table(raw: str) -> dict:
 
 # ── 엑셀(xlsx) 내보내기 — 2시트(원본붙여넣기 + 분석결과) ─────────────────────
 # 결제율은 ★두 칸(표시=소수1자리 / 정확=풀소수)으로 — 엑셀 재검산 시 반올림 오차 방지.
+# ★결제율은 처음부터 '비율'로 저장(rate/100)하고 % 서식으로 보여준다(엑셀에서 바로 % 인식).
 _FMT_INT = "#,##0"
-_FMT_RATE_SHOW = "0.0"
-_FMT_RATE_EXACT = "0.000000"
+_FMT_RATE_SHOW = "0.0%"
+_FMT_RATE_EXACT = "0.0000%"
 
 
-def _write_row(ws, values, *, formats=None):
-    """ws 에 한 행 추가하고, formats(컬럼인덱스→number_format) 지정."""
-    ws.append(list(values))
-    if formats:
-        r = ws.max_row
-        for col_idx, fmt in formats.items():
-            ws.cell(row=r, column=col_idx + 1).number_format = fmt
+def _rate_show(rate: float) -> float:
+    """표시용 결제율 비율 — 소수1자리 반올림 후 /100(예: 7.13 → 0.071)."""
+    return round(rate, 1) / 100.0
+
+
+def _rate_exact(rate: float) -> float:
+    """정확 결제율 비율 — 풀소수 /100(예: 7.129337 → 0.07129337)."""
+    return rate / 100.0
 
 
 def build_analytics_xlsx(result: dict) -> bytes:
-    """집계 result → xlsx bytes(시트2: 원본붙여넣기 + 분석결과). 순수 함수."""
+    """집계 result → xlsx bytes(시트: 원본붙여넣기 + 분석결과). 순수 함수.
+
+    결제율은 비율(rate/100)로 저장 + % 서식. 분석결과 시트는 섹션/헤더 강조·정렬·
+    테두리·열너비 자동·우수/저조 색으로 가독성을 높인다."""
     from io import BytesIO
 
     from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    # ── 서식 상수(openpyxl 지연 import 유지 위해 함수 내부 정의) ──
+    head_fill = PatternFill("solid", fgColor="305496")   # 진한 남색
+    head_font = Font(bold=True, color="FFFFFF")
+    sect_fill = PatternFill("solid", fgColor="D9E1F2")    # 연한 남색
+    sect_font = Font(bold=True, size=12, color="1F3864")
+    good_font = Font(bold=True, color="006100")           # 우수 초록
+    bad_font = Font(bold=True, color="9C0006")            # 저조 빨강
+    _side = Side(style="thin", color="BFBFBF")
+    thin = Border(left=_side, right=_side, top=_side, bottom=_side)
+    right = Alignment(horizontal="right")
+    center = Alignment(horizontal="center")
+    left = Alignment(horizontal="left")
+
+    def _header_row(ws, values):
+        ws.append(list(values))
+        r = ws.max_row
+        for col in range(1, len(values) + 1):
+            c = ws.cell(row=r, column=col)
+            c.fill, c.font, c.alignment, c.border = head_fill, head_font, center, thin
+        return r
+
+    def _section_row(ws, title, ncols):
+        ws.append([title])
+        r = ws.max_row
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=ncols)
+        c = ws.cell(row=r, column=1)
+        c.fill, c.font = sect_fill, sect_font
+        return r
+
+    def _data_row(ws, values, *, num_cols=(), fmts=None):
+        ws.append(list(values))
+        r = ws.max_row
+        for col in range(1, len(values) + 1):
+            c = ws.cell(row=r, column=col)
+            c.border = thin
+            c.alignment = right if col in num_cols else left
+        for col, fmt in (fmts or {}).items():
+            ws.cell(row=r, column=col).number_format = fmt
+        return r
+
+    def _autosize(ws):
+        widths: dict[str, int] = {}
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.value is None:
+                    continue
+                letter = cell.column_letter
+                widths[letter] = max(widths.get(letter, 0), len(str(cell.value)))
+        for letter, w in widths.items():
+            ws.column_dimensions[letter].width = max(10, min(40, w * 1.3))
 
     wb = Workbook()
 
     # ── 시트1: 원본붙여넣기(파싱된 전체 데이터행) ──
     ws1 = wb.active
     ws1.title = "원본붙여넣기"
-    ws1.append([
+    _header_row(ws1, [
         "채널속성", "nt_source", "nt_medium", "nt_detail", "nt_keyword",
         "유입", "결제", "결제율_표시", "결제율_정확", "결제금액",
     ])
-    row_fmt = {5: _FMT_INT, 6: _FMT_INT, 7: _FMT_RATE_SHOW,
-               8: _FMT_RATE_EXACT, 9: _FMT_INT}
+    row_num_cols = (6, 7, 8, 9, 10)
+    row_fmt = {6: _FMT_INT, 7: _FMT_INT, 8: _FMT_RATE_SHOW,
+               9: _FMT_RATE_EXACT, 10: _FMT_INT}
     for r in result.get("rows", []):
-        _write_row(ws1, [
+        _data_row(ws1, [
             r["channel"], r["source"], r["medium"], r["detail"], r["keyword"],
-            r["inflow"], r["pay"], round(r["pay_rate"], 1), r["pay_rate"], r["amount"],
-        ], formats=row_fmt)
+            r["inflow"], r["pay"], _rate_show(r["pay_rate"]), _rate_exact(r["pay_rate"]),
+            r["amount"],
+        ], num_cols=row_num_cols, fmts=row_fmt)
+    ws1.freeze_panes = "A2"
+    _autosize(ws1)
 
     # ── 시트2: 분석결과(섹션 세로 stack) ──
     ws2 = wb.create_sheet("분석결과")
     s = result["summary"]
 
-    ws2.append(["[요약]"])
-    _write_row(ws2, ["총 유입", s["inflow"]], formats={1: _FMT_INT})
-    _write_row(ws2, ["총 결제", s["pay"]], formats={1: _FMT_INT})
-    _write_row(ws2, ["결제율_표시", round(s["pay_rate"], 1)], formats={1: _FMT_RATE_SHOW})
-    _write_row(ws2, ["결제율_정확", s["pay_rate"]], formats={1: _FMT_RATE_EXACT})
-    _write_row(ws2, ["결제금액", s["amount"]], formats={1: _FMT_INT})
+    _section_row(ws2, "[요약]", 2)
+    _data_row(ws2, ["총 유입", s["inflow"]], num_cols=(2,), fmts={2: _FMT_INT})
+    _data_row(ws2, ["총 결제", s["pay"]], num_cols=(2,), fmts={2: _FMT_INT})
+    _data_row(ws2, ["결제율_표시", _rate_show(s["pay_rate"])],
+              num_cols=(2,), fmts={2: _FMT_RATE_SHOW})
+    _data_row(ws2, ["결제율_정확", _rate_exact(s["pay_rate"])],
+              num_cols=(2,), fmts={2: _FMT_RATE_EXACT})
+    _data_row(ws2, ["결제금액", s["amount"]], num_cols=(2,), fmts={2: _FMT_INT})
+    for rr in range(ws2.max_row - 4, ws2.max_row + 1):    # 항목명(A열) bold
+        ws2.cell(row=rr, column=1).font = Font(bold=True)
 
     ws2.append([])
-    ws2.append(["[데이터 품질 경고]"])
-    warnings = result.get("warnings") or []
-    if warnings:
-        for w in warnings:
-            ws2.append([w])
-    else:
-        ws2.append(["규칙 위반 없음"])
+    _section_row(ws2, "[데이터 품질 경고]", 2)
+    for w in (result.get("warnings") or ["규칙 위반 없음"]):
+        _data_row(ws2, [w])
 
-    # 매체/캠페인/제품 공통 숫자 포맷(헤더 다음 데이터행에 적용).
-    agg_fmt = {1: _FMT_INT, 2: _FMT_INT, 3: _FMT_RATE_SHOW,
-               4: _FMT_RATE_EXACT, 5: _FMT_INT}
+    # 매체/캠페인/제품 공통: 숫자열·포맷(유입·결제·결제율표시·결제율정확·결제금액).
+    agg_num = (2, 3, 4, 5, 6)
+    agg_fmt = {2: _FMT_INT, 3: _FMT_INT, 4: _FMT_RATE_SHOW,
+               5: _FMT_RATE_EXACT, 6: _FMT_INT}
 
     ws2.append([])
-    ws2.append(["[매체 통합 집계]"])
-    ws2.append(["매체", "유입", "결제", "결제율_표시", "결제율_정확", "결제금액"])
+    _section_row(ws2, "[매체 통합 집계]", 6)
+    _header_row(ws2, ["매체", "유입", "결제", "결제율_표시", "결제율_정확", "결제금액"])
     for m in result.get("by_medium", []):
-        _write_row(ws2, [
-            m["medium"], m["inflow"], m["pay"], round(m["rate"], 1), m["rate"],
-            m["amount"],
-        ], formats=agg_fmt)
+        _data_row(ws2, [
+            m["medium"], m["inflow"], m["pay"], _rate_show(m["rate"]),
+            _rate_exact(m["rate"]), m["amount"],
+        ], num_cols=agg_num, fmts=agg_fmt)
 
     ws2.append([])
-    ws2.append(["[캠페인별 성과]"])
-    ws2.append(["캠페인", "유입", "결제", "결제율_표시", "결제율_정확", "결제금액", "태그"])
+    _section_row(ws2, "[캠페인별 성과]", 7)
+    _header_row(ws2, [
+        "캠페인", "유입", "결제", "결제율_표시", "결제율_정확", "결제금액", "태그"])
     _tag_kr = {"good": "우수", "bad": "저조", "mid": ""}
     for c in result.get("by_campaign", []):
-        _write_row(ws2, [
-            c["campaign"], c["inflow"], c["pay"], round(c["rate"], 1), c["rate"],
-            c["amount"], _tag_kr.get(c.get("tag", ""), ""),
-        ], formats=agg_fmt)
+        tag = _tag_kr.get(c.get("tag", ""), "")
+        r = _data_row(ws2, [
+            c["campaign"], c["inflow"], c["pay"], _rate_show(c["rate"]),
+            _rate_exact(c["rate"]), c["amount"], tag,
+        ], num_cols=agg_num, fmts=agg_fmt)
+        tag_cell = ws2.cell(row=r, column=7)
+        tag_cell.alignment = center
+        if tag == "우수":
+            tag_cell.font = good_font
+        elif tag == "저조":
+            tag_cell.font = bad_font
 
     if result.get("by_product"):
         ws2.append([])
-        ws2.append(["[제품별 성과]"])
-        ws2.append(["제품", "유입", "결제", "결제율_표시", "결제율_정확", "결제금액"])
+        _section_row(ws2, "[제품별 성과]", 6)
+        _header_row(ws2, [
+            "제품", "유입", "결제", "결제율_표시", "결제율_정확", "결제금액"])
         for p in result["by_product"]:
-            _write_row(ws2, [
-                p["product"], p["inflow"], p["pay"], round(p["rate"], 1), p["rate"],
-                p["amount"],
-            ], formats=agg_fmt)
+            _data_row(ws2, [
+                p["product"], p["inflow"], p["pay"], _rate_show(p["rate"]),
+                _rate_exact(p["rate"]), p["amount"],
+            ], num_cols=agg_num, fmts=agg_fmt)
+
+    _autosize(ws2)
 
     buf = BytesIO()
     wb.save(buf)

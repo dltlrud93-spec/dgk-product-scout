@@ -174,6 +174,16 @@ def test_rows_includes_total_and_device_with_source():
 
 
 # ── 엑셀 내보내기 ────────────────────────────────────────────────────────────
+def _summary_cells(ws):
+    """분석결과 요약 항목명 → 값 셀(object) 매핑."""
+    out = {}
+    for row in ws.iter_rows():
+        if row and row[0].value in (
+                "총 유입", "총 결제", "결제율_표시", "결제율_정확", "결제금액"):
+            out[row[0].value] = row[1]
+    return out
+
+
 def test_build_analytics_xlsx_two_sheets_and_numbers():
     result = parse_smartstore_table(_SAMPLE)
     data = build_analytics_xlsx(result)
@@ -182,19 +192,33 @@ def test_build_analytics_xlsx_two_sheets_and_numbers():
     wb = load_workbook(BytesIO(data))
     assert wb.sheetnames == ["원본붙여넣기", "분석결과"]
 
-    # 시트1: 전체행 유입 1585 가 어딘가 존재
+    # 시트1: 전체행 유입 1585 가 어딘가 존재(정수 유지)
     ws1 = wb["원본붙여넣기"]
     vals1 = [c.value for row in ws1.iter_rows() for c in row]
     assert 1585 in vals1
 
-    # 시트2: 요약 항목/값 매핑
+    # 시트2 요약: 정수는 그대로, 결제율은 ★비율(<1.0) + % 서식
     ws2 = wb["분석결과"]
-    summary = {}
-    for row in ws2.iter_rows(values_only=True):
-        if row and row[0] in ("총 유입", "총 결제", "결제율_표시", "결제율_정확", "결제금액"):
-            summary[row[0]] = row[1]
-    assert summary["총 유입"] == 1585
-    assert summary["총 결제"] == 113
-    assert summary["결제금액"] == 2919930
-    assert summary["결제율_표시"] == 7.1
-    assert round(summary["결제율_정확"], 4) == 7.1293   # 113/1585*100 풀소수
+    sm = _summary_cells(ws2)
+    assert sm["총 유입"].value == 1585          # 비율변환 안 됨
+    assert sm["총 결제"].value == 113
+    assert sm["결제금액"].value == 2919930
+    show, exact = sm["결제율_표시"], sm["결제율_정확"]
+    assert show.value < 1.0 and "%" in show.number_format
+    assert exact.value < 1.0 and "%" in exact.number_format
+    assert round(show.value, 3) == 0.071        # 7.1% 비율
+    assert round(exact.value, 6) == 0.071293    # 113/1585 풀소수 비율
+
+
+def test_build_analytics_xlsx_header_styled_bold():
+    """표 헤더셀(매체 집계의 '유입')이 굵게 강조된다(서식 회귀 차단)."""
+    result = parse_smartstore_table(_SAMPLE)
+    wb = load_workbook(BytesIO(build_analytics_xlsx(result)))
+    ws2 = wb["분석결과"]
+    found_bold = False
+    for row in ws2.iter_rows():
+        if row and row[0].value == "매체":          # 매체 집계 헤더행
+            for cell in row:
+                if cell.value == "유입":
+                    found_bold = cell.font.bold is True
+    assert found_bold, "매체 표 헤더 '유입' 셀이 bold 아님"
