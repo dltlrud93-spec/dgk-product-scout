@@ -81,10 +81,11 @@ from src.revu_form import (
     RevuFormData,
     assemble_tracking_url,
     build_revu_docx,
-    default_mission_lines,
     deserialize_form,
     find_banned_words,
     merge_keywords,
+    mission_angles,
+    mission_block,
     revu_form_defaults,
     save_filename_json,
     serialize_form,
@@ -1563,9 +1564,15 @@ def _add_ai_reco_to_field(field_key: str) -> None:
         st.session_state[f"revu_ai_ck::{kw}"] = False
 
 
-def _fill_missions_from_car(car_model: str, product_name: str) -> None:
-    """차종·제품 기반 기본 미션 문구를 미션 칸에 채운다(on_click 콜백 — 덮어씀)."""
-    for i, line in enumerate(default_mission_lines(car_model, product_name)):
+def _apply_mission_block(car_model: str, product_name: str) -> None:
+    """선택한 각도로 리치 미션 3줄을 미션 칸에 채운다(on_click 콜백 — 덮어씀).
+
+    선택 라벨(revu_mission_angle) → 각도 key 역매핑 후 mission_block 생성.
+    다른 각도를 골라 다시 누르면 다시 채워진다('다시채움')."""
+    label = st.session_state.get("revu_mission_angle")
+    angles = mission_angles(product_name)
+    key = next((k for k, lab in angles if lab == label), angles[0][0])
+    for i, line in enumerate(mission_block(car_model, product_name, key)):
         st.session_state[f"revu_mission_{i}"] = line
 
 
@@ -1902,16 +1909,30 @@ def render_revu_form() -> None:
         else:
             st.info("필수값(제품 URL·nt_source·nt_medium)을 채우면 추적 URL이 생성됩니다.")
 
-    # ── Step 6. 미션 (차종 기반 기본 문구 버튼으로 자동 채움, 수정 가능) ──
+    # ── Step 6. 미션 (각도 선택 → 실데이터 기반 5단 미션 자동 채움, 수정 가능) ──
     st.subheader(f"6. {content_type} 미션 (1·2·3)")
     if car_model.strip():
-        st.button(
-            "✨ 차종 기반 미션 자동 채움", key="revu_fill_missions",
-            on_click=_fill_missions_from_car, args=(car_model, product_name),
-            help="차종·제품명으로 기본 미션 문구를 채웁니다(기존 미션을 덮어씀).")
+        _angles = mission_angles(product_name)
+        _angle_labels = [lab for _key, lab in _angles]
+        # 제품군이 바뀌면 이전 라벨이 새 옵션에 없을 수 있어 초기화(StreamlitAPIException 방지).
+        if st.session_state.get("revu_mission_angle") not in _angle_labels:
+            st.session_state["revu_mission_angle"] = _angle_labels[0]
+        col_ang, col_btn = st.columns([2, 1])
+        with col_ang:
+            st.selectbox(
+                "미션 각도 선택", _angle_labels, key="revu_mission_angle",
+                help="제품 특성에 맞는 후기 각도. 고르고 옆 버튼을 누르면 미션이 채워집니다.")
+        with col_btn:
+            st.button(
+                "✨ 선택한 각도로 미션 채우기", key="revu_fill_missions",
+                on_click=_apply_mission_block, args=(car_model, product_name),
+                help="기존 미션을 덮어씁니다. 다른 각도로 다시 누르면 다시 채워집니다.")
+        st.caption(
+            "각도를 고르고 채우면 5단 미션이 자동 작성됩니다. [필수 언급] 칸의 셀링포인트는 "
+            "실제 제품 사실로 꼭 확인·수정하세요(AI가 채우지 않음).")
     missions = []
     for i in range(3):
-        missions.append(st.text_input(f"미션 {i + 1}", key=f"revu_mission_{i}"))
+        missions.append(st.text_area(f"미션 {i + 1}", key=f"revu_mission_{i}", height=120))
 
     # ── Step 7. 담당자 (기본값 자동 채움, 수정 가능) ──
     st.subheader("7. 담당자 정보")

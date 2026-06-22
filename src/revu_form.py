@@ -300,18 +300,126 @@ def merge_keywords(existing: str, additions: list[str]) -> str:
     return ", ".join(out)
 
 
-def default_mission_lines(car_model: str, product_name: str) -> list[str]:
-    """차종 입력 시 블로그 미션 기본 문구 자동 생성(수정 가능). 비우면 빈 3줄."""
+# ── 미션 자동 채움(실데이터 기반 5단 구조) ──────────────────────────────────
+# 레뷰 상위 미션 분석(평균 600~800자)의 5단 구조를 3줄에 압축:
+#   ①제목 형식 ②본문 글자수·키워드 반복 ③필수 언급 셀링포인트 ④사진/영상(+비교샷·AI금지)
+#   ⑤차종 한정·구매처 링크·페널티 푸터.
+# ★규칙: 모든 줄에 🔴정보형 단어(교체방법·셀프·장착·청소 등) ★절대 금지(구매형 지향).
+# ★셀링포인트는 진짜 사실이라 사용자가 확인·수정한다(AI 생성 아님 — 허위 위험 회피).
+# {cm}=차종, {prod}=제품명(없으면 "제품"), {suffix}=제목 접미, {benefit}=비교 포인트.
+
+# 미션1은 제품 무관 공통(제목 형식 + 본문 글자수·키워드 반복).
+_MISSION1 = (
+    "제목은 「{cm} {prod} {suffix}」 형식으로 작성해주세요. "
+    "제목 키워드를 본문에 12회 이상 자연스럽게 넣고, 본문은 2000~2500자로 작성해주세요."
+)
+
+# 제품군별 미션2·3 + 기본 셀링포인트 + 각도표[(key,label,suffix,benefit)].
+_MISSION_BLOCKS = {
+    "airfilter": {
+        "selling": "활성탄 흡착 탈취 · 미세먼지/초미세먼지 차단 · 전 차종 호환 · 정품/가성비",
+        "m2": (
+            "다음 핵심 포인트를 반드시 언급해주세요 → [필수 언급(확인·수정): {SELLING}]. "
+            "기존(순정/방치) 필터와 비교해 {benefit}이 어떻게 달라졌는지 솔직한 실사용 "
+            "후기로 적고, 다양한 차종 호환 가능 점도 함께 언급해주세요."
+        ),
+        "m3": (
+            "사진 15장 이상 + 동작·사용 모습 동영상 2개(30초 이상)를 첨부하고, 기존에 쓰던 "
+            "더러운 필터와 새 필터 비교 사진을 꼭 넣어주세요. 대표 사진은 연출 컷으로 예쁘게 "
+            "지정하고 언박싱 사진은 2~3장만, AI로 생성한 이미지·영상은 사용 금지입니다. "
+            "{cm} 차종만 신청해주시고, 포스팅 하단에 구매처 링크를 삽입해주세요. "
+            "(미션 미준수 시 수정 요청이 있을 수 있습니다.)"
+        ),
+        "angles": [
+            ("smell", "냄새", "냄새 잡는 활성탄 후기", "에어컨 냄새·퀴퀴함"),
+            ("dust", "미세먼지", "미세먼지 차단 후기", "미세먼지 체감·실내 공기질"),
+            ("fit", "호환·가성비", "호환 가성비 후기", "차량 적합성·가격 대비 만족도"),
+            ("summer", "여름 냉방", "여름 에어컨 쾌적 후기", "여름철 냉방 시 쾌적함"),
+        ],
+    },
+    "wiper": {
+        "selling": "저소음·떨림 저감 · 발수 코팅 · 물자국/번짐 개선 · 규격(사이즈) 호환 · 가성비",
+        "m2": (
+            "다음 핵심 포인트를 반드시 언급해주세요 → [필수 언급(확인·수정): {SELLING}]. "
+            "기존 와이퍼와 비교해 {benefit}이 어떻게 달라졌는지 솔직한 실사용 후기로 적고, "
+            "{cm}에 맞는 규격(사이즈) 호환 점도 함께 언급해주세요."
+        ),
+        "m3": (
+            "와이퍼를 교체한 모습과 유리를 닦는 사진 7장 이상 + 동영상 1개 이상을 첨부하고, "
+            "기존 와이퍼의 줄·번짐과 새 와이퍼가 깨끗하게 닦이는 비교 사진(또는 영상)을 꼭 "
+            "넣어주세요. AI로 생성한 이미지·영상은 사용 금지입니다. {cm}에 맞는 규격으로 "
+            "신청해주시고, 포스팅 하단에 구매처 링크를 삽입해주세요. "
+            "(미션 미준수 시 수정 요청이 있을 수 있습니다.)"
+        ),
+        "angles": [
+            ("noise", "소음·떨림", "소음 잡는 와이퍼 후기", "와이퍼 소음·떨림(채터링)"),
+            ("water", "발수·시야", "발수 와이퍼 후기", "비 올 때 발수·시야 확보"),
+            ("spec", "규격·호환", "규격 맞는 와이퍼 후기", "사이즈 적합성·가성비"),
+            ("season", "장마·겨울", "장마철 와이퍼 후기", "빗물·성에 제거 성능"),
+        ],
+    },
+    "generic": {
+        "selling": "[제품 핵심 셀링포인트 2~3개 입력]",
+        "m2": (
+            "다음 핵심 포인트를 반드시 언급해주세요 → [필수 언급(확인·수정): {SELLING}]. "
+            "기존 제품과 비교해 {benefit}이 어떻게 달라졌는지 솔직한 실사용 후기로 적고, "
+            "다양한 차종 호환 가능 점도 함께 언급해주세요."
+        ),
+        "m3": (
+            "사진 15장 이상 + 동작·사용 모습 동영상 2개(30초 이상)를 첨부하고, 기존 제품과 "
+            "새 제품 비교 사진을 꼭 넣어주세요. 대표 사진은 연출 컷으로 예쁘게 지정하고 "
+            "언박싱 사진은 2~3장만, AI로 생성한 이미지·영상은 사용 금지입니다. "
+            "{cm} 차종만 신청해주시고, 포스팅 하단에 구매처 링크를 삽입해주세요. "
+            "(미션 미준수 시 수정 요청이 있을 수 있습니다.)"
+        ),
+        "angles": [
+            ("value", "핵심가치", "실사용 후기", "사용 후 체감 변화"),
+            ("price", "가성비", "가성비 후기", "가격 대비 만족도"),
+        ],
+    },
+}
+
+
+def _product_kind(product_name: str) -> str:
+    """제품명 → 미션 분기 키. 와이퍼 우선, 그다음 필터/에어컨/캐빈, 그 외 generic."""
+    p = product_name or ""
+    if "와이퍼" in p:
+        return "wiper"
+    if ("필터" in p) or ("에어컨" in p) or ("캐빈" in p):
+        return "airfilter"
+    return "generic"
+
+
+def mission_angles(product_name: str) -> list[tuple[str, str]]:
+    """제품군별 미션 '각도' 목록 [(key, label), ...] — 셀렉트박스용."""
+    block = _MISSION_BLOCKS[_product_kind(product_name)]
+    return [(key, label) for key, label, _suffix, _benefit in block["angles"]]
+
+
+def mission_block(car_model: str, product_name: str, angle_key: str) -> list[str]:
+    """차종·제품·각도로 리치 5단 구조 미션 3줄을 만든다(수정 가능). 차종 없으면 빈 3줄.
+
+    angle_key 가 해당 제품군에 없으면 첫 각도로 폴백. 🔴정보형 단어는 ★쓰지 않는다."""
     cm = (car_model or "").strip()
-    pn = (product_name or "").strip()
     if not cm:
         return ["", "", ""]
-    prod = pn or "제품"
+    prod = (product_name or "").strip() or "제품"
+    block = _MISSION_BLOCKS[_product_kind(product_name)]
+    angle = next(
+        (a for a in block["angles"] if a[0] == angle_key), block["angles"][0])
+    _key, _label, suffix, benefit = angle
+    fmt = dict(cm=cm, prod=prod, suffix=suffix, benefit=benefit, SELLING=block["selling"])
     return [
-        f"{cm} {prod} 교체방법 및 사용 후기를 상세히 작성해주세요.",
-        f"{cm} 차주에게 도움이 되는 정보(주행거리·교체주기 등)를 포함해주세요.",
-        "실제 장착 사진 5장 이상과 제품 패키지 사진을 첨부해주세요.",
+        _MISSION1.format(**fmt),
+        block["m2"].format(**fmt),
+        block["m3"].format(**fmt),
     ]
+
+
+def default_mission_lines(car_model: str, product_name: str) -> list[str]:
+    """하위호환 — 제품군의 ★첫 각도로 미션 3줄 생성. 차종 없으면 빈 3줄."""
+    block = _MISSION_BLOCKS[_product_kind(product_name)]
+    return mission_block(car_model, product_name, block["angles"][0][0])
 
 
 def find_banned_words(*texts: str) -> list[str]:

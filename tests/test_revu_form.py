@@ -244,10 +244,16 @@ def test_find_banned_words_clean_returns_empty():
 
 
 def test_default_mission_lines_with_car_model():
+    """리치 5단 블록(첫 각도) — 3줄·차종/제품 포함·🔴정보형 단어 없음."""
+    from src.core.keyword_intent import INFO_KEYWORDS
+
     lines = default_mission_lines("EV5", "에어컨필터")
     assert len(lines) == 3
     assert "EV5" in lines[0]
     assert "에어컨필터" in lines[0]
+    blob = "".join(lines).replace(" ", "").lower()
+    for w in INFO_KEYWORDS:           # 교체방법·셀프·장착 등 정보형 회귀 차단
+        assert w.replace(" ", "").lower() not in blob, f"정보형 '{w}' 포함됨"
 
 
 def test_default_mission_lines_without_car_model_blank():

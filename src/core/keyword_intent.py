@@ -53,6 +53,8 @@ _BUY_RAW = _BUY_COMMON + _BUY_AIRFILTER + _BUY_WIPER
 
 # 🟢구매형 단어 ★단일 출처(중복 정의 후 표기순·중복 제거). AI 프롬프트 등 외부에서 재사용.
 BUY_KEYWORDS = tuple(dict.fromkeys(_BUY_RAW))
+# 🔴정보형 단어 ★단일 출처. 미션 템플릿이 이 단어를 절대 안 쓰는지 회귀 차단에 재사용.
+INFO_KEYWORDS = tuple(dict.fromkeys(_INFO_RAW))
 
 # 🟡 중간 — 살 수도, 정보만 볼 수도. 사전에 없는 키워드도 여기(기본).
 _MID_RAW = [

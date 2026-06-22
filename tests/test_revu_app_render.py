@@ -238,6 +238,49 @@ def test_render_ai_reco_results_badges():
     assert "➕ 제목키워드에 추가" in btns and "➕ 본문키워드에 추가" in btns
 
 
+# ── 미션 각도 선택 + 채우기 실제 렌더 경로 ───────────────────────────────────
+
+def test_render_mission_angle_select_and_fill():
+    """미션 각도 셀렉트박스+버튼 렌더, 채우면 미션 필드가 리치하게 채워진다(🔴 없음)."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "체험단 양식"
+    at.session_state["revu_car"] = "EV5"
+    at.session_state["revu_product"] = "에어컨필터"
+    at.run()
+    assert not at.exception, f"미션 UI 렌더 예외: {at.exception}"
+    assert "미션 각도 선택" in {s.label for s in at.selectbox}
+
+    # ✨ 채우기 버튼 클릭 → 미션 채워짐
+    clicked = False
+    for b in at.button:
+        if b.label.startswith("✨"):
+            b.click()
+            clicked = True
+    assert clicked, "미션 채우기 버튼을 찾지 못함"
+    at.run()
+    assert not at.exception, f"미션 채움 후 예외: {at.exception}"
+
+    m = [at.session_state[f"revu_mission_{i}"] for i in range(3)]
+    assert all(line.strip() for line in m), "미션이 비어있음"
+    assert "EV5" in m[0] and "에어컨필터" in m[0]
+    blob = "".join(m).replace(" ", "")
+    assert "교체방법" not in blob and "셀프" not in blob   # 🔴정보형 없음
+
+
+def test_render_mission_fields_are_text_areas():
+    """미션 입력칸이 다줄 편집 가능한 text_area 로 렌더된다(리치 미션 표시·편집)."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "체험단 양식"
+    at.session_state["revu_car"] = "EV5"
+    at.session_state["revu_product"] = "와이퍼"
+    at.run()
+    assert not at.exception
+    ta_labels = {t.label for t in at.text_area}
+    assert {"미션 1", "미션 2", "미션 3"} <= ta_labels
+
+
 # ── 저장/불러오기 실제 렌더 경로 ─────────────────────────────────────────────
 
 def test_render_has_save_and_docx_download_buttons():
