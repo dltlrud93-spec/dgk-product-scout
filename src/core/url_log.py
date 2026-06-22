@@ -10,8 +10,11 @@ url_log.py — 추적 URL 생성 이력을 구글 시트에 적재(보조 기능
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Optional
+
+_log = logging.getLogger(__name__)
 
 LOG_HEADER = ["생성일시", "제품", "차종", "상품번호", "nt_medium", "nt_detail", "URL"]
 
@@ -77,7 +80,8 @@ def append_url_log(
         ws = _authorize(creds).open_by_key(sid).sheet1
         return write_log_row(
             ws, build_log_row(now, product_code, car, product_no, medium, detail, url))
-    except Exception:  # noqa: BLE001 — I/O 실패는 URL 생성과 무관, 조용히 'error'
+    except Exception:  # noqa: BLE001 — I/O 실패는 URL 생성과 무관, 'error' 반환(raise 안 함)
+        _log.exception("append_url_log 실패 sid=%s", sid)   # ★진단용 전체 트레이스백
         return "error"
 
 
@@ -94,4 +98,5 @@ def fetch_recent_logs(n: int = 10, *, sheet_id: Optional[str] = None, creds=None
         body = vals[1:]              # 헤더 제외
         return list(reversed(body[-n:])) if body else []
     except Exception:  # noqa: BLE001
+        _log.exception("fetch_recent_logs 실패")   # ★진단용 전체 트레이스백
         return []
