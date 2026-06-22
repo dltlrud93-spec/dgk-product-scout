@@ -89,6 +89,7 @@ from src.revu_form import (
     mission_angles,
     mission_block,
     mission_requires_car,
+    product_code_kr,
     revu_form_defaults,
     save_filename_json,
     serialize_form,
@@ -102,6 +103,7 @@ from src.core.campaign_analytics import (
 )
 from src.core.keyword_ai import generate_ai_keywords
 from src.core.keyword_intent import BADGE, classify_intent
+from src.core.url_log import LOG_HEADER, append_url_log, fetch_recent_logs
 from src.core.keyword_reco import (
     partition_banned,
     recommend_blog_keywords,
@@ -1946,6 +1948,33 @@ def render_revu_form() -> None:
                 key="revu_apply_track",
                 on_click=_apply_tracking_url, args=(track_url,),
             )
+
+            # ── URL 이력 저장(구글시트) — ★별도 기능, 실패해도 위 URL 생성엔 영향 없음 ──
+            _log_no = (st.session_state.get("revu_nt_keyword")
+                       or extract_product_no(track_base) or "")
+            col_lg, col_lv = st.columns(2)
+            if col_lg.button("📝 이 URL 이력 저장 (구글시트)", key="revu_log_save"):
+                _status = append_url_log(
+                    product_code=product_code_kr(product_name), car=car_model.strip(),
+                    product_no=_log_no, medium=nt_medium, detail=nt_detail, url=track_url)
+                if _status == "saved":
+                    st.success("이력 저장됨")
+                elif _status == "duplicate":
+                    st.info("이미 저장된 URL입니다")
+                elif _status == "no_config":
+                    st.warning("로그 시트 ID 미설정(Secrets url_log_sheet_id). URL은 정상.")
+                else:
+                    st.warning("이력 저장 실패(시트 공유·권한 확인). URL 생성엔 영향 없음.")
+            if col_lv.button("📜 최근 저장 이력 보기", key="revu_log_view"):
+                st.session_state["revu_log_rows"] = fetch_recent_logs(10)
+            _log_rows = st.session_state.get("revu_log_rows")
+            if _log_rows is not None:
+                if _log_rows:
+                    st.dataframe(
+                        [dict(zip(LOG_HEADER, r)) for r in _log_rows],
+                        use_container_width=True, hide_index=True)
+                else:
+                    st.caption("이력 없음(또는 시트 미설정).")
         else:
             st.info("필수값(제품 URL·nt_source·nt_medium)을 채우면 추적 URL이 생성됩니다.")
 

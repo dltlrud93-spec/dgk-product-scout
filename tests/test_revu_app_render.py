@@ -293,6 +293,21 @@ def test_render_nt_generator_new_controls():
     assert len(at.date_input) >= 1   # 모집 요청일
 
 
+def test_render_url_log_buttons_when_url_generated():
+    """track_url 이 생성되면 이력 저장/보기 버튼이 노출된다(무예외)."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "체험단 양식"
+    at.session_state["revu_track_base"] = "https://m.site.naver.com/2aAvQ"
+    at.session_state["revu_nt_source"] = "naver.blog"
+    at.session_state["revu_nt_medium"] = "N_REVU"
+    at.run()
+    assert not at.exception, f"URL 이력 버튼 렌더 예외: {at.exception}"
+    btns = {b.label for b in at.button}
+    assert any("이력 저장" in b for b in btns)
+    assert any("이력 보기" in b for b in btns)
+
+
 # ── 체험단 성과 분석 화면 렌더 ───────────────────────────────────────────────
 
 def test_render_campaign_analytics_empty():
