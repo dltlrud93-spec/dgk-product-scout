@@ -56,7 +56,7 @@ DEFAULT_MANAGER_EMAIL = "dgkorea93@naver.com"
 #  · nt_detail/nt_keyword: 한글·영문·숫자·특수문자 3종(-,_,.) 허용. 공백 금지. 선택.
 #  · 그 외 특수문자(/,?,&,=,# 등)·공백은 모두 금지.
 DEFAULT_NT_SOURCE = "naver.blog"
-DEFAULT_NT_MEDIUM = "social"
+DEFAULT_NT_MEDIUM = "N_REVU"   # 체험단 매체 표준 코드(N_ 접두 + 대문자 고정).
 DEFAULT_NT_DETAIL = "revu"
 
 # ── 양식 저장/불러오기(JSON 파일) ────────────────────────────────────────────
@@ -504,6 +504,38 @@ def mission_angles(product_name: str) -> list[tuple[str, str]]:
 def mission_requires_car(product_name: str) -> bool:
     """이 제품 미션이 차종을 필요로 하는가(자전거 펌프 등은 False)."""
     return _MISSION_BLOCKS[_product_kind(product_name)].get("car_specific", True)
+
+
+# ── nt_ 추적 URL 새 규칙(날짜_제품_차종 + 상품번호) ──────────────────────────
+# 제품명 표기가 제각각("와이퍼블레이드"·"에어컨필터")이어도 표준 코드로 통일해 집계 일관성↑.
+PRODUCT_CODE_KR = {
+    "wiper": "와이퍼", "airfilter": "에어컨필터", "glass": "유리복원제",
+    "navifilm": "네비필름", "holder": "거치대", "pump": "에어로닷", "generic": "제품",
+}
+
+
+def product_code_kr(product_name: str) -> str:
+    """제품명 → 표준 제품 코드(한글). 미션 분기(_product_kind)와 동일 기준."""
+    return PRODUCT_CODE_KR[_product_kind(product_name)]
+
+
+def build_nt_detail(date_yymmdd: str, product_name: str, car_model: str) -> str:
+    """nt_detail 을 규칙대로 조립: `날짜_제품코드_차종`(전체 공백 제거).
+
+    예: build_nt_detail("260622","에어컨필터","쏘렌토 MX5") == "260622_에어컨필터_쏘렌토MX5".
+    """
+    date = re.sub(r"\s+", "", date_yymmdd or "")
+    code = product_code_kr(product_name)
+    car = re.sub(r"\s+", "", car_model or "")
+    return f"{date}_{code}_{car}"
+
+
+def extract_product_no(url: str) -> str | None:
+    """스마트스토어 URL 에서 상품번호 추출. `/products/숫자` 매칭, 없으면 None.
+
+    예: ".../products/9600617781?x=1" → "9600617781". 상품번호 = 어떤 링크를 줬는지 식별."""
+    m = re.search(r"/products/(\d+)", url or "")
+    return m.group(1) if m else None
 
 
 def mission_block(car_model: str, product_name: str, angle_key: str) -> list[str]:

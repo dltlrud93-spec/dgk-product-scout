@@ -281,6 +281,59 @@ def test_render_mission_fields_are_text_areas():
     assert {"미션 1", "미션 2", "미션 3"} <= ta_labels
 
 
+# ── nt_ 새 규칙 UI(날짜·자동조립·상품번호 추출) 렌더 ─────────────────────────
+
+def test_render_nt_generator_new_controls():
+    """모집요청일 date_input + '자동 조립'·'상품번호 추출' 버튼이 렌더된다(무예외)."""
+    at = _open_revu_form()
+    assert not at.exception
+    btns = {b.label for b in at.button}
+    assert any("자동 조립" in b for b in btns)
+    assert any("상품번호 추출" in b for b in btns)
+    assert len(at.date_input) >= 1   # 모집 요청일
+
+
+# ── 체험단 성과 분석 화면 렌더 ───────────────────────────────────────────────
+
+def test_render_campaign_analytics_empty():
+    """분석 화면 진입 시 안내문이 뜨고 예외가 없다."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "체험단 성과 분석"
+    at.run()
+    assert not at.exception, f"분석 화면 렌더 예외: {at.exception}"
+    blob = " ".join(m.value for m in at.markdown)
+    assert "체험단 성과 분석" in (blob + " " + " ".join(t.value for t in at.title))
+
+
+def test_render_campaign_analytics_with_result():
+    """집계 결과 주입 시 요약·매체·캠페인·제품 블록이 무예외로 렌더된다."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "체험단 성과 분석"
+    at.session_state["ca_result"] = {
+        "summary": {"inflow": 1585, "pay": 113, "pay_rate": 7.13, "amount": 2919930},
+        "by_medium": [
+            {"medium": "blog", "inflow": 305, "pay": 28, "rate": 9.18, "amount": 1000000},
+            {"medium": "revu", "inflow": 286, "pay": 14, "rate": 4.9, "amount": 500000},
+        ],
+        "by_campaign": [
+            {"campaign": "P01filter2ea", "inflow": 229, "pay": 9, "rate": 3.9,
+             "amount": 180000, "tag": "bad"},
+        ],
+        "by_product": [
+            {"product": "와이퍼", "inflow": 76, "pay": 19, "rate": 25.0, "amount": 300000},
+        ],
+        "warnings": ["nt_medium 대소문자 혼용(예: REVU/revu) — 분리 집계됨"],
+    }
+    at.run()
+    assert not at.exception, f"분석 결과 렌더 예외: {at.exception}"
+    blob = " ".join(m.value for m in at.markdown)
+    assert "P01filter2ea" in blob and "와이퍼" in blob
+    warns = " ".join(w.value for w in at.warning)
+    assert "대소문자" in warns
+
+
 # ── 저장/불러오기 실제 렌더 경로 ─────────────────────────────────────────────
 
 def test_render_has_save_and_docx_download_buttons():

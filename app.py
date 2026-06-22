@@ -80,8 +80,10 @@ from src.revu_form import (
     TITLE_MAX,
     RevuFormData,
     assemble_tracking_url,
+    build_nt_detail,
     build_revu_docx,
     deserialize_form,
+    extract_product_no,
     find_banned_words,
     merge_keywords,
     mission_angles,
@@ -91,6 +93,11 @@ from src.revu_form import (
     save_filename_json,
     serialize_form,
     suggest_filename,
+)
+from src.core.campaign_analytics import (
+    PERF_BAD_RATE,
+    PERF_GOOD_RATE,
+    parse_smartstore_table,
 )
 from src.core.keyword_ai import generate_ai_keywords
 from src.core.keyword_intent import BADGE, classify_intent
@@ -1453,6 +1460,21 @@ def _apply_tracking_url(url: str) -> None:
     st.session_state["revu_url"] = url
 
 
+def _apply_nt_detail(yymmdd: str, product_name: str, car_model: str) -> None:
+    """nt_detail 을 규칙(날짜_제품_차종)대로 자동 조립해 칸에 채운다(on_click 콜백)."""
+    st.session_state["revu_nt_detail"] = build_nt_detail(yymmdd, product_name, car_model)
+
+
+def _apply_product_no(track_base: str) -> None:
+    """제품 URL 에서 상품번호를 뽑아 nt_keyword 로 채운다(on_click 콜백). 없으면 안내만."""
+    no = extract_product_no(track_base)
+    if no:
+        st.session_state["revu_nt_keyword"] = no
+        st.session_state["_revu_pno_msg"] = ("ok", no)
+    else:
+        st.session_state["_revu_pno_msg"] = ("err", None)
+
+
 # 키워드 추천: 같은 검색어 재호출 방지(1시간 캐시). 양식용 — 연관키워드+검색량만(가벼움).
 @st.cache_data(ttl=3600, show_spinner="연관 키워드 수집 중 (검색광고)...")
 def _load_reco_keywords(seed: str) -> dict:
@@ -1868,23 +1890,39 @@ def render_revu_form() -> None:
         track_base = st.text_input(
             "제품 URL", key="revu_track_base",
             help="예: https://m.site.naver.com/2aAvQ 또는 스마트스토어 URL")
+        recruit_date = st.date_input("체험단 모집 요청일", key="revu_recruit_date")
+        _yymmdd = recruit_date.strftime("%y%m%d") if recruit_date else ""
         col_s, col_m = st.columns(2)
         with col_s:
             nt_source = st.text_input("nt_source (필수)", key="revu_nt_source")
         with col_m:
-            nt_medium = st.text_input("nt_medium (필수)", key="revu_nt_medium")
+            # 대문자 강제(소문자 혼입 방지) — 표시·집계 일관성.
+            nt_medium = st.text_input(
+                "nt_medium (필수)", key="revu_nt_medium",
+                help="N_ 접두사 + 대문자 고정(예: N_REVU). 자동 대문자화됨.").upper()
         col_d, col_k = st.columns(2)
         with col_d:
-            nt_detail = st.text_input("nt_detail (선택)", key="revu_nt_detail")
+            nt_detail = st.text_input(
+                "nt_detail (선택)", key="revu_nt_detail",
+                help="규칙: 날짜_제품_차종. 아래 버튼으로 자동 조립(이후 수정 가능).")
+            st.button(
+                "📋 규칙대로 자동 조립(날짜_제품_차종)", key="revu_nt_detail_auto",
+                on_click=_apply_nt_detail, args=(_yymmdd, product_name, car_model),
+                help=f"{_yymmdd}_제품_차종 형식으로 nt_detail 을 채웁니다.")
         with col_k:
             nt_keyword = st.text_input(
                 "nt_keyword (선택)", key="revu_nt_keyword",
-                help="제품·차종 (예: EV5에어컨필터). 한글 허용. 비었으면 아래 버튼으로 차종 채움.")
-        if car_model.strip() and not st.session_state.get("revu_nt_keyword"):
+                help="상품번호 = 어떤 링크를 줬는지 식별. 아래 버튼으로 URL에서 추출.")
             st.button(
-                "차종을 nt_keyword 로", key="revu_nt_kw_from_car",
-                on_click=lambda: st.session_state.__setitem__(
-                    "revu_nt_keyword", car_model.strip()))
+                "🔗 URL에서 상품번호 추출", key="revu_nt_kw_from_url",
+                on_click=_apply_product_no, args=(track_base,),
+                help="제품 URL의 /products/숫자 에서 상품번호를 nt_keyword 로 채웁니다.")
+        _pno_msg = st.session_state.get("_revu_pno_msg")
+        if _pno_msg:
+            if _pno_msg[0] == "ok":
+                st.caption(f"✅ 상품번호 {_pno_msg[1]} 추출됨.")
+            else:
+                st.caption("⚠️ URL에서 상품번호(/products/숫자)를 찾지 못했습니다.")
 
         track_url, track_errors = assemble_tracking_url(
             track_base, nt_source, nt_medium, nt_detail, nt_keyword)
@@ -2013,12 +2051,98 @@ def render_revu_form() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 화면 6 — 체험단 성과 분석 (스마트스토어 마케팅분석 표 붙여넣기 → 집계)
+# ═══════════════════════════════════════════════════════════════════════════
+def _rate_color(rate: float) -> str:
+    """결제율 색: GOOD 초록 / BAD 빨강 / 그 외 기본."""
+    if rate >= PERF_GOOD_RATE:
+        return "#16a34a"
+    if rate < PERF_BAD_RATE:
+        return "#dc2626"
+    return "#334155"
+
+
+def _won(n: float) -> str:
+    return f"₩{int(round(n)):,}"
+
+
+def render_campaign_analytics() -> None:
+    st.title("체험단 성과 분석")
+    st.caption(
+        "스마트스토어 마케팅분석 표를 복사해 아래에 붙여넣고 [분석]을 누르세요. "
+        "nt_ 추적 파라미터 기준으로 매체·캠페인·제품별 성과와 데이터 품질을 집계합니다."
+    )
+    raw = st.text_area(
+        "스마트스토어 마케팅분석 표 붙여넣기 (Ctrl+V)", height=160,
+        key="ca_raw", help="표 영역을 드래그 → 복사(Ctrl+C) → 여기 붙여넣기(Ctrl+V).")
+    if st.button("분석", key="ca_run"):
+        st.session_state["ca_result"] = parse_smartstore_table(raw)
+
+    result = st.session_state.get("ca_result")
+    if not result:
+        st.info("표를 붙여넣고 [분석]을 누르면 결과가 나옵니다.")
+        return
+
+    # 1) 요약
+    s = result["summary"]
+    st.subheader("요약")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("총 유입", f"{int(round(s['inflow'])):,}")
+    c2.metric("총 결제", f"{int(round(s['pay'])):,}")
+    c3.metric("결제율", f"{round(s['pay_rate'], 1)}%")
+    c4.metric("결제금액", _won(s["amount"]))
+
+    # 2) 데이터 품질 경고
+    st.subheader("데이터 품질")
+    if result["warnings"]:
+        for w in result["warnings"]:
+            st.warning("⚠️ " + w)
+    else:
+        st.success("규칙 위반 없음")
+
+    # 3) 매체 통합 집계
+    st.subheader("매체 통합 집계")
+    if result["by_medium"]:
+        for m in result["by_medium"]:
+            color = _rate_color(m["rate"])
+            st.markdown(
+                f"**{m['medium']}** · 유입 {int(round(m['inflow'])):,} · "
+                f"결제 {int(round(m['pay'])):,} · "
+                f"<span style='color:{color};font-weight:700;'>결제율 "
+                f"{round(m['rate'], 1)}%</span> · {_won(m['amount'])}",
+                unsafe_allow_html=True)
+    else:
+        st.caption("매체 데이터가 없습니다(모바일/PC 행 없음).")
+
+    # 4) 캠페인별 성과
+    st.subheader("캠페인별 성과")
+    for camp in result["by_campaign"]:
+        badge = {"good": "★", "bad": "⚠️"}.get(camp["tag"], "")
+        name = camp["campaign"] or "(detail 없음)"
+        st.markdown(
+            f"{badge} **{name}** · 유입 {int(round(camp['inflow'])):,} · "
+            f"결제 {int(round(camp['pay'])):,} · 결제율 {round(camp['rate'], 1)}% · "
+            f"{_won(camp['amount'])}")
+        st.progress(min(int(round(camp["rate"])), 100))
+
+    # 5) 제품별 성과(신규 detail 규칙 적용 시에만 등장)
+    if result["by_product"]:
+        st.subheader("제품별 성과")
+        for p in result["by_product"]:
+            st.markdown(
+                f"**{p['product']}** · 유입 {int(round(p['inflow'])):,} · "
+                f"결제 {int(round(p['pay'])):,} · 결제율 {round(p['rate'], 1)}% · "
+                f"{_won(p['amount'])}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 사이드바 화면 선택 → 디스패치
 # ═══════════════════════════════════════════════════════════════════════════
 st.sidebar.markdown("**화면 선택**")
 _SCREEN = st.sidebar.radio(
     "화면 선택",
-    ["차종 수요", "계절 제품", "키워드 탐색기", "체험단 타겟", "체험단 양식"],
+    ["차종 수요", "계절 제품", "키워드 탐색기", "체험단 타겟", "체험단 양식",
+     "체험단 성과 분석"],
     label_visibility="collapsed",
     key="_screen_select",
 )
@@ -2032,5 +2156,7 @@ elif _SCREEN == "체험단 타겟":
     render_teamp()
 elif _SCREEN == "체험단 양식":
     render_revu_form()
+elif _SCREEN == "체험단 성과 분석":
+    render_campaign_analytics()
 else:
     render_keyword_explorer()

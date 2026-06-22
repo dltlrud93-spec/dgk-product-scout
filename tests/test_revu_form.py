@@ -27,9 +27,12 @@ from src.revu_form import (
     TITLE_MAX,
     RevuFormData,
     assemble_tracking_url,
+    build_nt_detail,
     build_revu_docx,
     build_tracking_url,
     default_mission_lines,
+    extract_product_no,
+    product_code_kr,
     deserialize_form,
     find_banned_words,
     merge_keywords,
@@ -808,3 +811,33 @@ def test_save_filename_json():
 def test_revu_form_defaults_matches_save_fields():
     d = revu_form_defaults()
     assert set(d) == {k for k, _ in REVU_SAVE_FIELDS}
+
+
+# ── nt_ 새 규칙 헬퍼(날짜_제품_차종 · 상품번호 추출) ──────────────────────────
+
+def test_build_nt_detail_airfilter_with_space():
+    assert build_nt_detail("260622", "에어컨필터", "쏘렌토 MX5") == "260622_에어컨필터_쏘렌토MX5"
+
+
+def test_build_nt_detail_wiper_normalizes_product_code():
+    # "와이퍼블레이드" 표기도 표준 코드 "와이퍼"로 통일
+    assert build_nt_detail("260622", "와이퍼블레이드", "렉스턴 스포츠") == "260622_와이퍼_렉스턴스포츠"
+
+
+def test_build_nt_detail_glass():
+    assert build_nt_detail("260101", "유리복원제", "아반떼") == "260101_유리복원제_아반떼"
+
+
+def test_product_code_kr():
+    assert product_code_kr("와이퍼블레이드") == "와이퍼"
+    assert product_code_kr("에어컨필터") == "에어컨필터"
+    assert product_code_kr("EV5 캐빈필터") == "에어컨필터"
+    assert product_code_kr("핸드폰 거치대") == "거치대"
+    assert product_code_kr("에어로닷 펌프") == "에어로닷"
+
+
+def test_extract_product_no():
+    assert extract_product_no(
+        "https://brand.naver.com/dgk/products/9600617781?x=1") == "9600617781"
+    assert extract_product_no("https://m.site.naver.com/2aAvQ") is None
+    assert extract_product_no("") is None
