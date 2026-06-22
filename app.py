@@ -2067,6 +2067,14 @@ def _won(n: float) -> str:
     return f"₩{int(round(n)):,}"
 
 
+def _sfx14(d: dict) -> str:
+    """+14일 기여도추정 보조 표기(작은 회색) — 메인(마지막클릭) 뒤에 덧붙임."""
+    return (
+        " <span style='color:#64748b;font-size:12px;'>"
+        f"(+14일 결제 {int(round(d.get('pay14', 0))):,}·{_won(d.get('amount14', 0))})"
+        "</span>")
+
+
 def render_campaign_analytics() -> None:
     st.title("체험단 성과 분석")
     st.caption(
@@ -2092,6 +2100,15 @@ def render_campaign_analytics() -> None:
     c2.metric("총 결제", f"{int(round(s['pay'])):,}")
     c3.metric("결제율", f"{round(s['pay_rate'], 1)}%")
     c4.metric("결제금액", _won(s["amount"]))
+    # 보조: +14일 기여도추정(지연구매 반영). 메인은 마지막클릭, 이건 참고용.
+    _amt = s["amount"]
+    _amt14 = s.get("amount14", 0)
+    _delta = ((_amt14 - _amt) / _amt * 100) if _amt else 0
+    cc1, cc2 = st.columns(2)
+    cc1.metric("결제금액(+14일 기여)", _won(_amt14))
+    cc2.metric("직접 대비", f"+{_delta:.0f}%")
+    st.caption(
+        "메인 지표는 마지막클릭. +14일 기여도추정은 지연 구매를 반영한 보조 지표입니다.")
 
     # 2) 데이터 품질 경고
     st.subheader("데이터 품질")
@@ -2110,7 +2127,7 @@ def render_campaign_analytics() -> None:
                 f"**{m['medium']}** · 유입 {int(round(m['inflow'])):,} · "
                 f"결제 {int(round(m['pay'])):,} · "
                 f"<span style='color:{color};font-weight:700;'>결제율 "
-                f"{round(m['rate'], 1)}%</span> · {_won(m['amount'])}",
+                f"{round(m['rate'], 1)}%</span> · {_won(m['amount'])}{_sfx14(m)}",
                 unsafe_allow_html=True)
     else:
         st.caption("매체 데이터가 없습니다(모바일/PC 행 없음).")
@@ -2123,7 +2140,8 @@ def render_campaign_analytics() -> None:
         st.markdown(
             f"{badge} **{name}** · 유입 {int(round(camp['inflow'])):,} · "
             f"결제 {int(round(camp['pay'])):,} · 결제율 {round(camp['rate'], 1)}% · "
-            f"{_won(camp['amount'])}")
+            f"{_won(camp['amount'])}{_sfx14(camp)}",
+            unsafe_allow_html=True)
         st.progress(min(int(round(camp["rate"])), 100))
 
     # 5) 제품별 성과(신규 detail 규칙 적용 시에만 등장)
@@ -2133,7 +2151,8 @@ def render_campaign_analytics() -> None:
             st.markdown(
                 f"**{p['product']}** · 유입 {int(round(p['inflow'])):,} · "
                 f"결제 {int(round(p['pay'])):,} · 결제율 {round(p['rate'], 1)}% · "
-                f"{_won(p['amount'])}")
+                f"{_won(p['amount'])}{_sfx14(p)}",
+                unsafe_allow_html=True)
 
     # 엑셀 다운로드(원본붙여넣기 + 분석결과 2시트, 결제율 표시/정확 두 칸).
     st.divider()

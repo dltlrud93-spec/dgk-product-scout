@@ -32,6 +32,8 @@ _CHANNELS = {_DEVICE_ALL, *_DEVICE_SPLIT}
 # 컬럼 인덱스.
 _C_CHANNEL, _C_MEDIUM, _C_DETAIL, _C_KEYWORD = 0, 2, 3, 4
 _C_INFLOW, _C_PAY, _C_AMOUNT = 6, 9, 11
+# +14일 기여도추정(마지막클릭 9/11 다음) — 보조 지표(결제수·결제금액만).
+_C_PAY14, _C_AMOUNT14 = 13, 15
 _MIN_COLS = 12
 
 # 구형 detail → 제품 추정용 키워드(부분일치, 더 구체적인 것 먼저).
@@ -100,7 +102,8 @@ _C_SOURCE = 1
 
 class _Row:
     __slots__ = (
-        "channel", "source", "medium", "detail", "keyword", "inflow", "pay", "amount")
+        "channel", "source", "medium", "detail", "keyword", "inflow", "pay", "amount",
+        "pay14", "amount14")
 
     def __init__(self, cols: list[str]):
         self.channel = cols[_C_CHANNEL].strip()
@@ -112,6 +115,9 @@ class _Row:
         self.inflow = _num(cols[_C_INFLOW])
         self.pay = _num(cols[_C_PAY])
         self.amount = _num(cols[_C_AMOUNT])
+        # +14일 기여도추정(보조) — 인덱스 범위 방어(없으면 0).
+        self.pay14 = _num(cols[_C_PAY14]) if len(cols) > _C_PAY14 else 0.0
+        self.amount14 = _num(cols[_C_AMOUNT14]) if len(cols) > _C_AMOUNT14 else 0.0
 
 
 def _parse_rows(raw: str) -> list[_Row]:
@@ -138,18 +144,22 @@ def _aggregate(rows: list[_Row], key_fn, key_name: str, *, with_tag: bool = Fals
     for r in rows:
         k = key_fn(r)
         if k not in groups:
-            groups[k] = {"inflow": 0.0, "pay": 0.0, "amount": 0.0}
+            groups[k] = {"inflow": 0.0, "pay": 0.0, "amount": 0.0,
+                         "pay14": 0.0, "amount14": 0.0}
             order.append(k)
         g = groups[k]
         g["inflow"] += r.inflow
         g["pay"] += r.pay
         g["amount"] += r.amount
+        g["pay14"] += r.pay14
+        g["amount14"] += r.amount14
     out: list[dict] = []
     for k in order:
         g = groups[k]
         rate = _rate(g["pay"], g["inflow"])
         item = {key_name: k, "inflow": g["inflow"], "pay": g["pay"],
-                "rate": rate, "amount": g["amount"]}
+                "rate": rate, "amount": g["amount"],
+                "pay14": g["pay14"], "amount14": g["amount14"]}
         if with_tag:
             item["tag"] = _perf_tag(rate)
         out.append(item)
@@ -201,6 +211,8 @@ def parse_smartstore_table(raw: str) -> dict:
         "pay": s_pay,
         "pay_rate": _rate(s_pay, s_inflow),
         "amount": s_amount,
+        "pay14": sum(r.pay14 for r in src),
+        "amount14": sum(r.amount14 for r in src),
     }
 
     by_medium = _aggregate(device_rows, lambda r: r.medium.lower(), "medium")
@@ -224,6 +236,7 @@ def parse_smartstore_table(raw: str) -> dict:
             "channel": r.channel, "source": r.source, "medium": r.medium,
             "detail": r.detail, "keyword": r.keyword, "inflow": r.inflow,
             "pay": r.pay, "pay_rate": _rate(r.pay, r.inflow), "amount": r.amount,
+            "pay14": r.pay14, "amount14": r.amount14,
         }
         for r in rows
     ]
@@ -325,15 +338,16 @@ def build_analytics_xlsx(result: dict) -> bytes:
     _header_row(ws1, [
         "채널속성", "nt_source", "nt_medium", "nt_detail", "nt_keyword",
         "유입", "결제", "결제율_표시", "결제율_정확", "결제금액",
+        "결제수_14일", "결제금액_14일",
     ])
-    row_num_cols = (6, 7, 8, 9, 10)
+    row_num_cols = (6, 7, 8, 9, 10, 11, 12)
     row_fmt = {6: _FMT_INT, 7: _FMT_INT, 8: _FMT_RATE_SHOW,
-               9: _FMT_RATE_EXACT, 10: _FMT_INT}
+               9: _FMT_RATE_EXACT, 10: _FMT_INT, 11: _FMT_INT, 12: _FMT_INT}
     for r in result.get("rows", []):
         _data_row(ws1, [
             r["channel"], r["source"], r["medium"], r["detail"], r["keyword"],
             r["inflow"], r["pay"], _rate_show(r["pay_rate"]), _rate_exact(r["pay_rate"]),
-            r["amount"],
+            r["amount"], r["pay14"], r["amount14"],
         ], num_cols=row_num_cols, fmts=row_fmt)
     ws1.freeze_panes = "A2"
     _autosize(ws1)
@@ -350,7 +364,10 @@ def build_analytics_xlsx(result: dict) -> bytes:
     _data_row(ws2, ["결제율_정확", _rate_exact(s["pay_rate"])],
               num_cols=(2,), fmts={2: _FMT_RATE_EXACT})
     _data_row(ws2, ["결제금액", s["amount"]], num_cols=(2,), fmts={2: _FMT_INT})
-    for rr in range(ws2.max_row - 4, ws2.max_row + 1):    # 항목명(A열) bold
+    _data_row(ws2, ["결제수(+14일)", s.get("pay14", 0)], num_cols=(2,), fmts={2: _FMT_INT})
+    _data_row(ws2, ["결제금액(+14일)", s.get("amount14", 0)],
+              num_cols=(2,), fmts={2: _FMT_INT})
+    for rr in range(ws2.max_row - 6, ws2.max_row + 1):    # 항목명(A열) bold(7개)
         ws2.cell(row=rr, column=1).font = Font(bold=True)
 
     ws2.append([])
@@ -358,32 +375,35 @@ def build_analytics_xlsx(result: dict) -> bytes:
     for w in (result.get("warnings") or ["규칙 위반 없음"]):
         _data_row(ws2, [w])
 
-    # 매체/캠페인/제품 공통: 숫자열·포맷(유입·결제·결제율표시·결제율정확·결제금액).
-    agg_num = (2, 3, 4, 5, 6)
+    # 매체/캠페인/제품 공통 숫자열·포맷(+14일 결제수·결제금액 2열 포함, 결제율14는 없음).
+    agg_num = (2, 3, 4, 5, 6, 7, 8)
     agg_fmt = {2: _FMT_INT, 3: _FMT_INT, 4: _FMT_RATE_SHOW,
-               5: _FMT_RATE_EXACT, 6: _FMT_INT}
+               5: _FMT_RATE_EXACT, 6: _FMT_INT, 7: _FMT_INT, 8: _FMT_INT}
+    agg_head = ["유입", "결제", "결제율_표시", "결제율_정확", "결제금액",
+                "결제수_14일", "결제금액_14일"]
+
+    def _agg_vals(d, name_key):
+        return [
+            d[name_key], d["inflow"], d["pay"], _rate_show(d["rate"]),
+            _rate_exact(d["rate"]), d["amount"],
+            d.get("pay14", 0), d.get("amount14", 0),
+        ]
 
     ws2.append([])
-    _section_row(ws2, "[매체 통합 집계]", 6)
-    _header_row(ws2, ["매체", "유입", "결제", "결제율_표시", "결제율_정확", "결제금액"])
+    _section_row(ws2, "[매체 통합 집계]", 8)
+    _header_row(ws2, ["매체", *agg_head])
     for m in result.get("by_medium", []):
-        _data_row(ws2, [
-            m["medium"], m["inflow"], m["pay"], _rate_show(m["rate"]),
-            _rate_exact(m["rate"]), m["amount"],
-        ], num_cols=agg_num, fmts=agg_fmt)
+        _data_row(ws2, _agg_vals(m, "medium"), num_cols=agg_num, fmts=agg_fmt)
 
     ws2.append([])
-    _section_row(ws2, "[캠페인별 성과]", 7)
-    _header_row(ws2, [
-        "캠페인", "유입", "결제", "결제율_표시", "결제율_정확", "결제금액", "태그"])
+    _section_row(ws2, "[캠페인별 성과]", 9)
+    _header_row(ws2, ["캠페인", *agg_head, "태그"])
     _tag_kr = {"good": "우수", "bad": "저조", "mid": ""}
     for c in result.get("by_campaign", []):
         tag = _tag_kr.get(c.get("tag", ""), "")
-        r = _data_row(ws2, [
-            c["campaign"], c["inflow"], c["pay"], _rate_show(c["rate"]),
-            _rate_exact(c["rate"]), c["amount"], tag,
-        ], num_cols=agg_num, fmts=agg_fmt)
-        tag_cell = ws2.cell(row=r, column=7)
+        r = _data_row(ws2, [*_agg_vals(c, "campaign"), tag],
+                      num_cols=agg_num, fmts=agg_fmt)
+        tag_cell = ws2.cell(row=r, column=9)
         tag_cell.alignment = center
         if tag == "우수":
             tag_cell.font = good_font
@@ -392,14 +412,10 @@ def build_analytics_xlsx(result: dict) -> bytes:
 
     if result.get("by_product"):
         ws2.append([])
-        _section_row(ws2, "[제품별 성과]", 6)
-        _header_row(ws2, [
-            "제품", "유입", "결제", "결제율_표시", "결제율_정확", "결제금액"])
+        _section_row(ws2, "[제품별 성과]", 8)
+        _header_row(ws2, ["제품", *agg_head])
         for p in result["by_product"]:
-            _data_row(ws2, [
-                p["product"], p["inflow"], p["pay"], _rate_show(p["rate"]),
-                _rate_exact(p["rate"]), p["amount"],
-            ], num_cols=agg_num, fmts=agg_fmt)
+            _data_row(ws2, _agg_vals(p, "product"), num_cols=agg_num, fmts=agg_fmt)
 
     _autosize(ws2)
 

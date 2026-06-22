@@ -16,9 +16,10 @@ from src.core.campaign_analytics import (
 )
 
 
-def _row(channel, medium, detail, keyword, inflow, pay, amount):
-    """12컬럼 데이터행 생성(검증된 인덱스: 0/2/3/4/6/9/11)."""
-    cols = ["-"] * 12
+def _row(channel, medium, detail, keyword, inflow, pay, amount,
+         pay14="0", amount14="0"):
+    """16컬럼 데이터행(인덱스 0/2/3/4/6/9/11 + +14일 13/15)."""
+    cols = ["-"] * 16
     cols[0] = channel
     cols[2] = medium
     cols[3] = detail
@@ -26,23 +27,27 @@ def _row(channel, medium, detail, keyword, inflow, pay, amount):
     cols[6] = inflow
     cols[9] = pay
     cols[11] = amount
+    cols[13] = pay14
+    cols[15] = amount14
     return "\t".join(cols)
 
 
 # 헤더 2줄(채널그룹 등 — col0 가 채널값이 아니라 자동 skip).
 _HEADER = "\t".join(["채널그룹", "채널", "nt_medium", "nt_detail", "nt_keyword",
-                     "유입(전체)", "유입수", "c7", "c8", "결제수", "c10", "결제금액"])
-_HEADER2 = "\t".join(["속성"] + ["-"] * 11)
+                     "유입(전체)", "유입수", "c7", "c8", "결제수", "c10", "결제금액",
+                     "c12", "결제수14", "c14", "결제금액14"])
+_HEADER2 = "\t".join(["속성"] + ["-"] * 15)
 
 # 시경 표 구조 재현(전체 그랜드토탈 + 모바일/PC 기기행, 매체 대소문자 혼용·빈 keyword·형식 혼용).
+# +14일 기여도추정: 전체 결제금액14 = 3,367,195(마지막클릭 2,919,930 대비 +15%).
 _SAMPLE = "\n".join([
     _HEADER, _HEADER2,
-    _row("전체", "", "", "", "1,585", "113", "2,919,930"),          # 그랜드토탈
-    _row("모바일", "blog", "P01filter2ea", "에어컨필터", "150", "5", "100,000"),
-    _row("PC", "blog", "P01filter2ea", "에어컨필터", "79", "4", "80,000"),
-    _row("모바일", "blog", "260622_와이퍼_렉스턴스포츠", "와이퍼", "76", "19", "300,000"),
-    _row("모바일", "REVU", "P02wiper", "", "200", "10", "250,000"),  # keyword 빈칸
-    _row("PC", "revu", "P02wiper", "-", "86", "4", "90,000"),        # keyword "-" + 대소문자 혼용
+    _row("전체", "", "", "", "1,585", "113", "2,919,930", "130", "3,367,195"),
+    _row("모바일", "blog", "P01filter2ea", "에어컨필터", "150", "5", "100,000", "6", "120,000"),
+    _row("PC", "blog", "P01filter2ea", "에어컨필터", "79", "4", "80,000", "5", "95,000"),
+    _row("모바일", "blog", "260622_와이퍼_렉스턴스포츠", "와이퍼", "76", "19", "300,000", "22", "350,000"),
+    _row("모바일", "REVU", "P02wiper", "", "200", "10", "250,000", "12", "300,000"),
+    _row("PC", "revu", "P02wiper", "-", "86", "4", "90,000", "5", "110,000"),
     "깨진\t줄",                                                       # 컬럼 부족 → skip
 ])
 
@@ -173,13 +178,41 @@ def test_rows_includes_total_and_device_with_source():
     assert round(rows[1]["pay_rate"], 4) == round(5 / 150 * 100, 4)
 
 
+# ── +14일 기여도추정 보조 지표 ──────────────────────────────────────────────
+def test_summary_includes_pay14_amount14():
+    out = parse_smartstore_table(_SAMPLE)
+    s = out["summary"]
+    assert s["pay14"] == 130
+    assert s["amount14"] == 3367195
+    # 메인(마지막클릭)은 그대로 — 회귀 차단
+    assert s["pay"] == 113 and s["amount"] == 2919930
+
+
+def test_by_medium_and_campaign_pay14_aggregated():
+    out = parse_smartstore_table(_SAMPLE)
+    by = {m["medium"]: m for m in out["by_medium"]}
+    assert by["blog"]["pay14"] == 33 and by["blog"]["amount14"] == 565000
+    assert by["revu"]["pay14"] == 17 and by["revu"]["amount14"] == 410000
+    camp = {c["campaign"]: c for c in out["by_campaign"]}
+    assert camp["P01filter2ea"]["pay14"] == 11
+    assert camp["P01filter2ea"]["amount14"] == 215000
+
+
+def test_rows_include_pay14_amount14():
+    out = parse_smartstore_table(_SAMPLE)
+    grand = out["rows"][0]
+    assert grand["channel"] == "전체"
+    assert grand["pay14"] == 130 and grand["amount14"] == 3367195
+
+
 # ── 엑셀 내보내기 ────────────────────────────────────────────────────────────
 def _summary_cells(ws):
     """분석결과 요약 항목명 → 값 셀(object) 매핑."""
     out = {}
     for row in ws.iter_rows():
         if row and row[0].value in (
-                "총 유입", "총 결제", "결제율_표시", "결제율_정확", "결제금액"):
+                "총 유입", "총 결제", "결제율_표시", "결제율_정확", "결제금액",
+                "결제수(+14일)", "결제금액(+14일)"):
             out[row[0].value] = row[1]
     return out
 
@@ -208,6 +241,20 @@ def test_build_analytics_xlsx_two_sheets_and_numbers():
     assert exact.value < 1.0 and "%" in exact.number_format
     assert round(show.value, 3) == 0.071        # 7.1% 비율
     assert round(exact.value, 6) == 0.071293    # 113/1585 풀소수 비율
+    # +14일 보조: 요약에 결제금액(+14일) 행 존재(정수)
+    assert sm["결제금액(+14일)"].value == 3367195
+
+
+def test_xlsx_has_14day_columns():
+    """시트1 헤더에 결제금액_14일 컬럼이 추가되고 값이 정수로 기록된다."""
+    result = parse_smartstore_table(_SAMPLE)
+    wb = load_workbook(BytesIO(build_analytics_xlsx(result)))
+    ws1 = wb["원본붙여넣기"]
+    header = [c.value for c in next(ws1.iter_rows())]
+    assert "결제수_14일" in header and "결제금액_14일" in header
+    # 전체행 결제금액_14일 값이 존재
+    vals1 = [c.value for row in ws1.iter_rows() for c in row]
+    assert 3367195 in vals1
 
 
 def test_build_analytics_xlsx_header_styled_bold():
