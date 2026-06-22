@@ -95,11 +95,17 @@ def _detect_product(detail: str) -> str:
     return "미분류"
 
 
+_C_SOURCE = 1
+
+
 class _Row:
-    __slots__ = ("channel", "medium", "detail", "keyword", "inflow", "pay", "amount")
+    __slots__ = (
+        "channel", "source", "medium", "detail", "keyword", "inflow", "pay", "amount")
 
     def __init__(self, cols: list[str]):
         self.channel = cols[_C_CHANNEL].strip()
+        # nt_source(col1) — 인덱스 범위 방어(없으면 "").
+        self.source = cols[_C_SOURCE].strip() if len(cols) > _C_SOURCE else ""
         self.medium = cols[_C_MEDIUM].strip()
         self.detail = cols[_C_DETAIL].strip()
         self.keyword = cols[_C_KEYWORD].strip()
@@ -212,10 +218,118 @@ def parse_smartstore_table(raw: str) -> dict:
     else:
         by_product = []
 
+    # 파싱된 전체 데이터행(전체+기기, 붙여넣기 순서) — 엑셀 시트1 재현용.
+    parsed_rows = [
+        {
+            "channel": r.channel, "source": r.source, "medium": r.medium,
+            "detail": r.detail, "keyword": r.keyword, "inflow": r.inflow,
+            "pay": r.pay, "pay_rate": _rate(r.pay, r.inflow), "amount": r.amount,
+        }
+        for r in rows
+    ]
+
     return {
         "summary": summary,
         "by_medium": by_medium,
         "by_campaign": by_campaign,
         "by_product": by_product,
         "warnings": _build_warnings(device_rows),
+        "rows": parsed_rows,
     }
+
+
+# ── 엑셀(xlsx) 내보내기 — 2시트(원본붙여넣기 + 분석결과) ─────────────────────
+# 결제율은 ★두 칸(표시=소수1자리 / 정확=풀소수)으로 — 엑셀 재검산 시 반올림 오차 방지.
+_FMT_INT = "#,##0"
+_FMT_RATE_SHOW = "0.0"
+_FMT_RATE_EXACT = "0.000000"
+
+
+def _write_row(ws, values, *, formats=None):
+    """ws 에 한 행 추가하고, formats(컬럼인덱스→number_format) 지정."""
+    ws.append(list(values))
+    if formats:
+        r = ws.max_row
+        for col_idx, fmt in formats.items():
+            ws.cell(row=r, column=col_idx + 1).number_format = fmt
+
+
+def build_analytics_xlsx(result: dict) -> bytes:
+    """집계 result → xlsx bytes(시트2: 원본붙여넣기 + 분석결과). 순수 함수."""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    wb = Workbook()
+
+    # ── 시트1: 원본붙여넣기(파싱된 전체 데이터행) ──
+    ws1 = wb.active
+    ws1.title = "원본붙여넣기"
+    ws1.append([
+        "채널속성", "nt_source", "nt_medium", "nt_detail", "nt_keyword",
+        "유입", "결제", "결제율_표시", "결제율_정확", "결제금액",
+    ])
+    row_fmt = {5: _FMT_INT, 6: _FMT_INT, 7: _FMT_RATE_SHOW,
+               8: _FMT_RATE_EXACT, 9: _FMT_INT}
+    for r in result.get("rows", []):
+        _write_row(ws1, [
+            r["channel"], r["source"], r["medium"], r["detail"], r["keyword"],
+            r["inflow"], r["pay"], round(r["pay_rate"], 1), r["pay_rate"], r["amount"],
+        ], formats=row_fmt)
+
+    # ── 시트2: 분석결과(섹션 세로 stack) ──
+    ws2 = wb.create_sheet("분석결과")
+    s = result["summary"]
+
+    ws2.append(["[요약]"])
+    _write_row(ws2, ["총 유입", s["inflow"]], formats={1: _FMT_INT})
+    _write_row(ws2, ["총 결제", s["pay"]], formats={1: _FMT_INT})
+    _write_row(ws2, ["결제율_표시", round(s["pay_rate"], 1)], formats={1: _FMT_RATE_SHOW})
+    _write_row(ws2, ["결제율_정확", s["pay_rate"]], formats={1: _FMT_RATE_EXACT})
+    _write_row(ws2, ["결제금액", s["amount"]], formats={1: _FMT_INT})
+
+    ws2.append([])
+    ws2.append(["[데이터 품질 경고]"])
+    warnings = result.get("warnings") or []
+    if warnings:
+        for w in warnings:
+            ws2.append([w])
+    else:
+        ws2.append(["규칙 위반 없음"])
+
+    # 매체/캠페인/제품 공통 숫자 포맷(헤더 다음 데이터행에 적용).
+    agg_fmt = {1: _FMT_INT, 2: _FMT_INT, 3: _FMT_RATE_SHOW,
+               4: _FMT_RATE_EXACT, 5: _FMT_INT}
+
+    ws2.append([])
+    ws2.append(["[매체 통합 집계]"])
+    ws2.append(["매체", "유입", "결제", "결제율_표시", "결제율_정확", "결제금액"])
+    for m in result.get("by_medium", []):
+        _write_row(ws2, [
+            m["medium"], m["inflow"], m["pay"], round(m["rate"], 1), m["rate"],
+            m["amount"],
+        ], formats=agg_fmt)
+
+    ws2.append([])
+    ws2.append(["[캠페인별 성과]"])
+    ws2.append(["캠페인", "유입", "결제", "결제율_표시", "결제율_정확", "결제금액", "태그"])
+    _tag_kr = {"good": "우수", "bad": "저조", "mid": ""}
+    for c in result.get("by_campaign", []):
+        _write_row(ws2, [
+            c["campaign"], c["inflow"], c["pay"], round(c["rate"], 1), c["rate"],
+            c["amount"], _tag_kr.get(c.get("tag", ""), ""),
+        ], formats=agg_fmt)
+
+    if result.get("by_product"):
+        ws2.append([])
+        ws2.append(["[제품별 성과]"])
+        ws2.append(["제품", "유입", "결제", "결제율_표시", "결제율_정확", "결제금액"])
+        for p in result["by_product"]:
+            _write_row(ws2, [
+                p["product"], p["inflow"], p["pay"], round(p["rate"], 1), p["rate"],
+                p["amount"],
+            ], formats=agg_fmt)
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

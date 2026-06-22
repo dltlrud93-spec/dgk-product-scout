@@ -97,6 +97,7 @@ from src.revu_form import (
 from src.core.campaign_analytics import (
     PERF_BAD_RATE,
     PERF_GOOD_RATE,
+    build_analytics_xlsx,
     parse_smartstore_table,
 )
 from src.core.keyword_ai import generate_ai_keywords
@@ -2133,6 +2134,15 @@ def render_campaign_analytics() -> None:
                 f"**{p['product']}** · 유입 {int(round(p['inflow'])):,} · "
                 f"결제 {int(round(p['pay'])):,} · 결제율 {round(p['rate'], 1)}% · "
                 f"{_won(p['amount'])}")
+
+    # 엑셀 다운로드(원본붙여넣기 + 분석결과 2시트, 결제율 표시/정확 두 칸).
+    st.divider()
+    st.download_button(
+        "📥 엑셀로 다운로드 (원본+분석)",
+        data=build_analytics_xlsx(result),
+        file_name=f"체험단성과분석_{date.today().isoformat()}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="ca_xlsx")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

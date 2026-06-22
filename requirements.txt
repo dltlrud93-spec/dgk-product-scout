@@ -9,3 +9,5 @@ google-auth>=2.29
 python-docx>=1.1
 # AI 키워드 자동완성 — Claude API(체험단 양식 Step4)
 anthropic>=0.40
+# 체험단 성과 분석 — 엑셀(xlsx) 다운로드
+openpyxl>=3.1
