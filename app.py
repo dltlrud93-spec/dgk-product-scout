@@ -1254,10 +1254,11 @@ def render_teamp() -> None:
                 st.error(f"검색광고 키 오류: {type(e).__name__}: {e}")
                 return
             total_m = len(models)
-            est_min = total_m * config.JOGYEONPYO_SECONDS_PER_MODEL / 60
+            _batches = -(-total_m // 5)   # ⌈N/5⌉ — 검색량 5개 묶음 조회
+            est_min = _batches * config.JOGYEONPYO_SECONDS_PER_MODEL / 60
             st.info(
                 f"📊 데이터 **{jp_product_label}** {total_m}개 차종 조회 — "
-                f"약 **{est_min:.1f}분** 소요 예상(차종당 ~{config.JOGYEONPYO_SECONDS_PER_MODEL}초). "
+                f"약 **{est_min:.1f}분** 소요 예상(검색량 5개씩 묶음 조회로 단축). "
                 "진행 중 다른 탭 이동 가능, 결과는 6시간 캐시됩니다. "
                 "검색량 0 차종은 블로그 조회 전 자동 제외(시간 단축)."
             )

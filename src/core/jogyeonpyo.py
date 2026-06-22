@@ -240,6 +240,25 @@ def keyword_volume(adapter, keyword: str) -> int:
     return 0
 
 
+def keyword_volumes(adapter, keywords: list) -> dict:
+    """여러 키워드(★최대 5개)를 한 번에 검색량 조회 → {keyword: volume} 맵.
+
+    검색광고 키워드도구는 hintKeywords 를 5개까지 받으므로, 묶음 1회 호출로
+    N회 호출·N회 sleep 을 ⌈N/5⌉ 로 줄인다. 매칭 없는 키워드는 0(신차 등).
+    API 오류는 호출자에게 전파(부분 실패 격리는 상위 배치 루프에서).
+    """
+    from src.core.car_models import normalize_text       # noqa: PLC0415
+    from src.core.search_volume import member_volume      # noqa: PLC0415
+
+    rows = adapter._request_keywordstool(list(keywords))
+    by_norm: dict[str, int] = {}
+    for row in rows:
+        rk = normalize_text(str(row.get("relKeyword", "")))
+        if rk and rk not in by_norm:
+            by_norm[rk] = member_volume(row)
+    return {kw: by_norm.get(normalize_text(kw), 0) for kw in keywords}
+
+
 def harvest_jogyeonpyo_kw_items(
     adapter,
     models: list[str],
@@ -247,43 +266,58 @@ def harvest_jogyeonpyo_kw_items(
     *,
     on_progress: Optional[Callable[[int, int], None]] = None,
     rate_limit_seconds: Optional[float] = None,
+    batch_size: int = 5,
 ) -> tuple[list[tuple[str, str, int]], list[str]]:
     """조견표 차종 목록 × 제품 → 체험단 키워드 단위 (keyword, car_model, volume) 리스트.
 
     · keyword     = build_keyword(차종, product)  (공백 없는 단일 토큰)
     · car_model   = 원본 차종명(표시 전용)
-    · volume      = keyword_volume(adapter, keyword)  (검색량 0 키워드는 제외 — 기존 체험단 규약)
-    검색량 조회는 차종마다 1회 호출(시드당 1회 규약 동일) + 호출 간 rate limit sleep.
-    차종별 예외(429 소진 등)는 격리해 failed 에 모으고 나머지는 계속(부분 실패 허용).
+    · volume      = 검색량 0 키워드는 제외(기존 체험단 규약)
+    ★검색량 조회는 차종 5개씩 ★묶음 1회 호출(keyword_volumes) → ⌈N/5⌉ 회로 단축(약 5배).
+    배치 사이에만 rate limit sleep(첫 배치 전엔 안 함). 배치 예외(429 소진 등)는 그 배치의
+    차종 전부를 failed 로 격리하고 계속(부분 실패 허용).
 
     반환: (items[검색량 내림차순], failed_models). 검색량 0 은 items 에서 제외(failed 아님).
     """
+    batch_size = min(batch_size, 5)   # ★API 가 5개 초과 hint 를 거부 — 절대 >5 금지
     rl = adapter.rate_limit_seconds if rate_limit_seconds is None else rate_limit_seconds
     items: list[tuple[str, str, int]] = []
     failed: list[str] = []
     total = len(models)
-    did_call = False
-    for i, m in enumerate(models):
+    done = 0   # 처리 누계(빈 키워드 차종 포함) — 진행률용
+
+    # (model, keyword) 쌍 — 빈 키워드(build 실패)는 호출 대상에서 빼되 진행수엔 포함.
+    pairs: list[tuple[str, str]] = []
+    for m in models:
         kw = build_keyword(m, product)
-        if not kw:
-            if on_progress:
-                on_progress(i + 1, total)
-            continue
+        if kw:
+            pairs.append((m, kw))
+        else:
+            done += 1   # 호출 없이 처리 완료로 카운트
+    if on_progress and done:
+        on_progress(done, total)
+
+    did_call = False
+    for start in range(0, len(pairs), batch_size):
+        batch = pairs[start:start + batch_size]
         if did_call:
-            adapter._sleep(rl)   # 호출 간 rate limit (첫 호출 전엔 sleep 안 함)
+            adapter._sleep(rl)   # 배치 사이에만 sleep(첫 배치 전엔 안 함)
+        did_call = True
         try:
-            vol = keyword_volume(adapter, kw)
-            did_call = True
-        except Exception:  # noqa: BLE001  (429 소진 등 — 차종 단위 격리)
-            did_call = True
-            failed.append(m)
+            volmap = keyword_volumes(adapter, [kw for _m, kw in batch])
+        except Exception:  # noqa: BLE001 (429 소진 등 — 배치 단위 격리)
+            failed.extend(m for m, _kw in batch)
+            done += len(batch)
             if on_progress:
-                on_progress(i + 1, total)
+                on_progress(done, total)
             continue
-        if vol > 0:
-            items.append((kw, m, vol))
+        for m, kw in batch:
+            vol = volmap.get(kw, 0)
+            if vol > 0:
+                items.append((kw, m, vol))
+        done += len(batch)
         if on_progress:
-            on_progress(i + 1, total)
+            on_progress(done, total)
 
     items.sort(key=lambda x: x[2], reverse=True)
     return items, failed

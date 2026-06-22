@@ -12,30 +12,43 @@ from src.core.jogyeonpyo import (
     extract_models,
     harvest_jogyeonpyo_kw_items,
     keyword_volume,
+    keyword_volumes,
     normalize_car_keyword,
 )
 
 
 class _FakeAdapter:
-    """검색광고 키워드도구 대역 — vol_map[keyword]=(pc,mobile). fail_kws 는 예외 발생."""
+    """검색광고 키워드도구 대역(★묶음 hint 지원) — vol_map[keyword]=(pc,mobile).
+
+    hints 의 모든 키워드에 대해 vol>0 인 행을 반환(+관련어 노이즈 1줄). hints 중 하나라도
+    fail_kws 에 있으면 예외(배치 단위 실패 재현). calls/sleeps 카운트.
+    """
 
     def __init__(self, vol_map: dict, fail_kws: tuple = ()):
         self.rate_limit_seconds = 0.0
         self.vol_map = vol_map
         self.fail_kws = set(fail_kws)
         self.sleeps = 0
+        self.calls = 0
+        self.max_hints = 0
 
     def _sleep(self, _s):
         self.sleeps += 1
 
     def _request_keywordstool(self, hints):
-        kw = hints[0]
-        if kw in self.fail_kws:
+        self.calls += 1
+        self.max_hints = max(self.max_hints, len(hints))
+        if any(h in self.fail_kws for h in hints):
             raise RuntimeError("429 Too Many Requests")
-        pc, mob = self.vol_map.get(kw, (0, 0))
-        if pc == 0 and mob == 0:
-            return []   # 매칭 행 없음 → 검색량 0
-        return [{"relKeyword": kw, "monthlyPcQcCnt": pc, "monthlyMobileQcCnt": mob}]
+        rows = []
+        for h in hints:
+            pc, mob = self.vol_map.get(h, (0, 0))
+            if pc or mob:
+                rows.append(
+                    {"relKeyword": h, "monthlyPcQcCnt": pc, "monthlyMobileQcCnt": mob})
+        rows.append(   # 관련어 노이즈(매칭 안 되는 행) — 실제 응답 모사
+            {"relKeyword": "관련어노이즈", "monthlyPcQcCnt": 9, "monthlyMobileQcCnt": 1})
+        return rows
 
 
 # ── 정규화 ──────────────────────────────────────────────────────────────────
@@ -172,34 +185,85 @@ def test_harvest_filters_zero_volume():
     assert failed == []   # vol 0 은 실패가 아님
 
 
-def test_harvest_isolates_failures():
-    ad = _FakeAdapter(
-        {"셀토스에어컨필터": (500, 0)},
-        fail_kws=("토레스에어컨필터",),   # 429 소진 가정
-    )
-    items, failed = harvest_jogyeonpyo_kw_items(ad, ["셀토스", "토레스"], "에어컨필터")
-    assert [c for _, c, _ in items] == ["셀토스"]
-    assert failed == ["토레스"]
+def test_harvest_isolates_failures_per_batch():
+    """배치 단위 격리 — 실패 배치의 차종만 failed, 다른 배치는 정상."""
+    ok = [f"차종{i}" for i in range(5)]    # 배치1(5개) 정상
+    vol = {build_keyword(m, "에어컨필터"): (100, 0) for m in ok}
+    ad = _FakeAdapter(vol, fail_kws=("토레스에어컨필터",))
+    items, failed = harvest_jogyeonpyo_kw_items(
+        ad, ok + ["토레스"], "에어컨필터")   # 배치2 = [토레스] → 실패
+    assert sorted(c for _, c, _ in items) == sorted(ok)   # 배치1 정상
+    assert failed == ["토레스"]                            # 배치2만 failed
+    assert ad.calls == 2                                   # ⌈6/5⌉
 
 
-def test_harvest_progress_callback_called_per_model():
+def test_harvest_progress_callback_per_batch():
+    """진행률은 배치 끝마다 누계로 갱신 + 빈 키워드는 호출 없이 선반영."""
     ad = _FakeAdapter({"셀토스에어컨필터": (500, 0)})
     seen = []
     harvest_jogyeonpyo_kw_items(
-        ad, ["셀토스", "토레스"], "에어컨필터",
+        ad, ["()", "셀토스"], "에어컨필터",          # "()" → 빈 키워드(선카운트)
         on_progress=lambda done, total: seen.append((done, total)),
     )
-    assert seen == [(1, 2), (2, 2)]
+    assert seen[-1] == (2, 2)        # total 도달
+    assert (1, 2) in seen            # 빈 키워드 선반영
 
 
-def test_harvest_rate_limit_sleep_between_calls():
-    ad = _FakeAdapter({"셀토스에어컨필터": (500, 0), "토레스에어컨필터": (300, 0)})
-    harvest_jogyeonpyo_kw_items(ad, ["셀토스", "토레스"], "에어컨필터")
-    assert ad.sleeps == 1   # 첫 호출 전엔 sleep 안 함 → 2개 차종이면 1회
+def test_harvest_rate_limit_sleep_between_batches():
+    """sleep 횟수 = 배치수 - 1(첫 배치 전엔 sleep 안 함)."""
+    models = [f"차종{i}" for i in range(6)]   # 2배치
+    vol = {build_keyword(m, "에어컨필터"): (100, 0) for m in models}
+    ad = _FakeAdapter(vol)
+    harvest_jogyeonpyo_kw_items(ad, models, "에어컨필터")
+    assert ad.calls == 2
+    assert ad.sleeps == 1            # 배치수(2) - 1
 
 
 def test_harvest_skips_empty_keyword():
     ad = _FakeAdapter({"셀토스에어컨필터": (500, 0)})
     items, failed = harvest_jogyeonpyo_kw_items(ad, ["()", "셀토스"], "에어컨필터")
     assert [c for _, c, _ in items] == ["셀토스"]
+
+
+# ── 묶음 검색량 조회(5배 가속) ───────────────────────────────────────────────
+def test_keyword_volumes_batch_mapping():
+    ad = _FakeAdapter({"A에어컨필터": (100, 0), "B에어컨필터": (0, 50),
+                       "C에어컨필터": (10, 10)})
+    vm = keyword_volumes(ad, ["A에어컨필터", "B에어컨필터", "C에어컨필터", "D에어컨필터"])
+    assert vm == {"A에어컨필터": 100, "B에어컨필터": 50, "C에어컨필터": 20,
+                  "D에어컨필터": 0}   # 매칭 없는 D 는 0
+    assert ad.calls == 1             # 묶음 1회 호출
+
+
+def test_harvest_batches_by_five():
+    """12개 차종 → ⌈12/5⌉=3회만 호출(기존 12회 아님), hint 5개 초과 없음."""
+    models = [f"차종{i}" for i in range(12)]
+    vol = {build_keyword(m, "에어컨필터"): (100, 0) for m in models}
+    ad = _FakeAdapter(vol)
+    items, failed = harvest_jogyeonpyo_kw_items(ad, models, "에어컨필터")
+    assert ad.calls == 3
+    assert ad.max_hints <= 5         # API 5개 초과 hint 거부 — 절대 안 넘김
+    assert len(items) == 12 and failed == []
+
+
+def test_harvest_batch_size_capped_at_five():
+    """batch_size>5 를 줘도 5로 캡(API 거부 방지)."""
+    models = [f"차종{i}" for i in range(12)]
+    vol = {build_keyword(m, "에어컨필터"): (100, 0) for m in models}
+    ad = _FakeAdapter(vol)
+    harvest_jogyeonpyo_kw_items(ad, models, "에어컨필터", batch_size=10)
+    assert ad.calls == 3 and ad.max_hints <= 5
+
+
+def test_harvest_sorted_and_zero_excluded_across_batches():
+    """배치 넘나들며 검색량 내림차순 + 0 제외 유지."""
+    models = [f"차종{i}" for i in range(7)]
+    vol = {build_keyword(f"차종{i}", "에어컨필터"): (i * 100, 0) for i in range(7)}
+    # 차종0 → vol 0 → 제외
+    ad = _FakeAdapter(vol)
+    items, failed = harvest_jogyeonpyo_kw_items(ad, models, "에어컨필터")
+    vols = [v for _, _, v in items]
+    assert vols == sorted(vols, reverse=True)
+    assert all(v > 0 for v in vols)
+    assert "차종0" not in [c for _, c, _ in items]   # vol 0 제외
     assert failed == []
