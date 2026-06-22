@@ -59,6 +59,7 @@ from src.core.teamp_mode import (
     format_recent_3m,
     format_recent_ratio,
     harvest_teamp_kw_items,
+    restore_teamp_widgets,
     top_gold_kw_rows,
     top_gold_kw_rows_by_ratio,
 )
@@ -424,6 +425,10 @@ _TEAMP_RESULTS_KEY = "_teamp_results"
 _SRC_ASSOC = "키워드로 차종 검색"   # 연관어 수확(제품 키워드 시드 → 네이버 연관어)
 _SRC_DATA = "데이터로 차종 검색"    # 조견표 차종 × 제품 직접 생성
 _SRC_HYBRID = "하이브리드 모드"     # 둘 다(연관어 + 조견표 합쳐 중복 제거)
+
+# 정렬 라디오 옵션(위젯 정의·복원에서 단일 출처로 공유).
+_TEAMP_SORT_OPTS = ["비율 오름차순 (황금 위)", "검색량 내림차순", "검색량↑ + 최근글↓ (숨은 기회)"]
+_TEAMP_TOP10_OPTS = ["비율 낮은 순", "검색량 높은 순"]
 
 
 def _trend_display(t, low_conf: bool) -> str:
@@ -1063,11 +1068,16 @@ def _read_jogyeonpyo_models(worksheet: str, limit: int) -> list[str]:
 def render_teamp() -> None:
     _inject_css()
 
-    # 위젯 렌더 전: 캐시 조회 + 탭 복귀 시 text_area 복원 (위젯 evict 대응)
+    # 위젯 렌더 전: 캐시 조회 + 탭 복귀 시 사이드바 위젯 복원 (위젯 evict 대응)
+    # ★제품키워드뿐 아니라 소스·데이터제품·정렬도 복원 — 안 하면 서명 리셋→캐시미스→재추출.
     _cached = st.session_state.get(_TEAMP_RESULTS_KEY)
-    _last_kws = st.session_state.get("_teamp_last_keywords")
-    if _last_kws and "teamp_products" not in st.session_state:
-        st.session_state["teamp_products"] = ", ".join(_last_kws)
+    restore_teamp_widgets(
+        st.session_state,
+        src_opts=[_SRC_ASSOC, _SRC_DATA, _SRC_HYBRID],
+        jp_opts=config.JOGYEONPYO_PRODUCTS,
+        sort_opts=_TEAMP_SORT_OPTS,
+        top10_opts=_TEAMP_TOP10_OPTS,
+    )
 
     st.title("체험단 타겟 선정")
     st.caption(
@@ -1129,7 +1139,7 @@ def render_teamp() -> None:
     st.sidebar.markdown("**정렬**")
     sort_label = st.sidebar.radio(
         "본표",
-        ["비율 오름차순 (황금 위)", "검색량 내림차순", "검색량↑ + 최근글↓ (숨은 기회)"],
+        _TEAMP_SORT_OPTS,
         key="teamp_sort",
         help=(
             "기본: 비율 오름차순(황금 후보가 위). "
@@ -1140,16 +1150,21 @@ def render_teamp() -> None:
     )
     top10_sort_label = st.sidebar.radio(
         "황금 TOP10",
-        ["비율 낮은 순", "검색량 높은 순"],
+        _TEAMP_TOP10_OPTS,
         key="teamp_top10_sort",
         help="기본: 비율 낮은 순(공략 여지 큰 순). 검색량 높은 순으로 바꾸면 규모 큰 황금 후보를 먼저 볼 수 있습니다.",
     )
 
     products = [s.strip() for s in product_text.replace(",", "\n").splitlines() if s.strip()]
 
-    # 마지막 키워드 보존 (비위젯 키 → 탭 전환 후에도 유지)
+    # 마지막 선택 보존 (비위젯 키 → 탭 전환 후 위젯 evict 돼도 복원 → 서명 유지 → 무재추출)
     if products:
         st.session_state["_teamp_last_keywords"] = products
+    st.session_state["_teamp_last_source"] = source_label
+    if jp_product_label:
+        st.session_state["_teamp_last_jp_product"] = jp_product_label
+    st.session_state["_teamp_last_sort"] = sort_label
+    st.session_state["_teamp_last_top10_sort"] = top10_sort_label
 
     col_btn, col_note = st.columns([1, 4])
     with col_btn:

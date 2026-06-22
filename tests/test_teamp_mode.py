@@ -40,6 +40,7 @@ from src.core.teamp_mode import (
     format_recent_3m,
     format_recent_ratio,
     harvest_teamp_kw_items,
+    restore_teamp_widgets,
     top_gold_kw_rows,
     top_gold_kw_rows_by_ratio,
     top_gold_rows,
@@ -862,3 +863,61 @@ def test_format_recent_ratio_normal_values():
     assert format_recent_ratio(0, 200) == "0.0%"      # HUWELL 케이스(최근 0건)
     assert format_recent_ratio(50, 100) == "50.0%"
     assert format_recent_ratio(99, 100) == "99.0%"    # 상한 직전은 계산
+
+
+# ── 탭 전환 시 사이드바 위젯 복원(재추출 버그 수정) ──────────────────────────
+_SRC = ["키워드로 차종 검색", "데이터로 차종 검색", "하이브리드 모드"]
+_JP = {"에어컨필터": {}, "와이퍼": {}}
+_SORT = ["비율 오름차순 (황금 위)", "검색량 내림차순"]
+_T10 = ["비율 낮은 순", "검색량 높은 순"]
+
+
+def _restore(state):
+    restore_teamp_widgets(state, src_opts=_SRC, jp_opts=_JP,
+                          sort_opts=_SORT, top10_opts=_T10)
+    return state
+
+
+def test_restore_source_and_jp_when_widget_evicted():
+    """백업값 있고 위젯키 없으면(탭 복귀) 소스·데이터제품이 복원된다."""
+    state = {
+        "_teamp_last_source": "데이터로 차종 검색",
+        "_teamp_last_jp_product": "와이퍼",
+        "_teamp_last_keywords": ["에어컨필터", "캐빈필터"],
+    }
+    _restore(state)
+    assert state["teamp_source"] == "데이터로 차종 검색"
+    assert state["teamp_jp_product"] == "와이퍼"
+    assert state["teamp_products"] == "에어컨필터, 캐빈필터"
+
+
+def test_restore_does_not_override_existing_widget():
+    """위젯키가 이미 있으면(사용자 선택) 복원이 덮어쓰지 않는다."""
+    state = {
+        "_teamp_last_source": "데이터로 차종 검색",
+        "teamp_source": "하이브리드 모드",
+    }
+    _restore(state)
+    assert state["teamp_source"] == "하이브리드 모드"   # 불변
+
+
+def test_restore_skips_invalid_option():
+    """백업값이 유효 옵션이 아니면 복원하지 않는다(옵션 변경 방어)."""
+    state = {"_teamp_last_source": "옛날옵션", "_teamp_last_jp_product": "단종제품"}
+    _restore(state)
+    assert "teamp_source" not in state
+    assert "teamp_jp_product" not in state
+
+
+def test_restore_sort_widgets():
+    state = {"_teamp_last_sort": "검색량 내림차순", "_teamp_last_top10_sort": "검색량 높은 순"}
+    _restore(state)
+    assert state["teamp_sort"] == "검색량 내림차순"
+    assert state["teamp_top10_sort"] == "검색량 높은 순"
+
+
+def test_restore_noop_when_no_backup():
+    """백업 없으면(첫 진입) 아무것도 복원하지 않는다."""
+    state = {}
+    _restore(state)
+    assert state == {}

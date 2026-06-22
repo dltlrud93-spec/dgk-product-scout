@@ -594,3 +594,33 @@ def fetch_recent_3m_docs_partial(
             r.recent_3m_docs = result_map[r.keyword]
 
     return rows
+
+
+# ── 탭 전환 시 사이드바 위젯 복원(순수) ───────────────────────────────────────
+# 배경: 다른 화면으로 갔다 오면 사이드바 위젯이 evict 돼 기본값으로 리셋된다. 그러면
+# 요청 서명(소스·제품·데이터제품·상한)이 바뀌어 캐시 미적중 → 블로그 문서수 등 API 재호출.
+# 마지막 선택을 비위젯 키(_teamp_last_*)에 백업해두고, 위젯 렌더 전에 여기서 복원한다.
+
+def restore_teamp_widgets(state, *, src_opts, jp_opts, sort_opts=None, top10_opts=None):
+    """evict 된 사이드바 위젯 키를 마지막 백업값으로 복원(순수 — state 는 dict 유사).
+
+    백업키(_teamp_last_*)가 있고 위젯키가 ★없을 때만, 그리고 ★유효 옵션일 때만 복원
+    (옵션 변경 시 StreamlitAPIException 방지). 위젯키가 이미 있으면 사용자 선택이므로 불변.
+    """
+    last_kws = state.get("_teamp_last_keywords")
+    if last_kws and "teamp_products" not in state:
+        state["teamp_products"] = ", ".join(last_kws)
+    last_src = state.get("_teamp_last_source")
+    if last_src in src_opts and "teamp_source" not in state:
+        state["teamp_source"] = last_src
+    last_jp = state.get("_teamp_last_jp_product")
+    if last_jp in jp_opts and "teamp_jp_product" not in state:
+        state["teamp_jp_product"] = last_jp
+    if sort_opts is not None:
+        last_sort = state.get("_teamp_last_sort")
+        if last_sort in sort_opts and "teamp_sort" not in state:
+            state["teamp_sort"] = last_sort
+    if top10_opts is not None:
+        last_t10 = state.get("_teamp_last_top10_sort")
+        if last_t10 in top10_opts and "teamp_top10_sort" not in state:
+            state["teamp_top10_sort"] = last_t10
