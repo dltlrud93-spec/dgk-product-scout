@@ -8,7 +8,12 @@ test_mission_blocks.py — 실데이터 기반 5단 미션 블록(제품별×각
 from __future__ import annotations
 
 from src.core.keyword_intent import INFO_KEYWORDS
-from src.revu_form import default_mission_lines, mission_angles, mission_block
+from src.revu_form import (
+    _subject_josa,
+    default_mission_lines,
+    mission_angles,
+    mission_block,
+)
 
 # 에어컨필터·와이퍼·generic(그 외) 모두 커버.
 _PRODUCTS = ["에어컨필터", "캐빈필터", "와이퍼", "방향제"]
@@ -87,6 +92,27 @@ def test_generic_selling_is_placeholder_for_user_to_fill():
     """generic 셀링포인트는 사용자가 채울 자리표시(AI 생성 아님)."""
     lines = mission_block("EV5", "방향제", "value")
     assert "[제품 핵심 셀링포인트" in "".join(lines)
+
+
+def test_subject_josa():
+    assert _subject_josa("확보") == "가"      # 모음 끝(보) → 가
+    assert _subject_josa("만족도") == "가"    # 도 → 가
+    assert _subject_josa("가성비") == "가"    # 비 → 가
+    assert _subject_josa("쾌적함") == "이"    # 받침 ㅁ → 이
+    assert _subject_josa("성능") == "이"      # 받침 ㅇ → 이
+    assert _subject_josa("채터링)") == "이"   # 괄호로 끝나도 마지막 한글 '링' → 이
+    assert _subject_josa("") == "이"          # 한글 없음 → 이
+    assert _subject_josa("ABC") == "이"       # 한글 없음 → 이
+
+
+def test_mission2_no_vowel_plus_이_grammar_error():
+    """전 제품×전 각도 미션2에 '확보이/만족도이/가성비이' 같은 모음+이 오류가 없다."""
+    bad = ["확보이 ", "만족도이 ", "가성비이 ", "쾌적함가 ", "성능가 "]
+    for prod in _PRODUCTS:
+        for key, _lab in mission_angles(prod):
+            m2 = mission_block("EV5", prod, key)[1]
+            for token in bad:
+                assert token not in m2, f"{prod}/{key}: 조사 오류 '{token.strip()}' → {m2}"
 
 
 def test_richness_missions_are_long_enough():

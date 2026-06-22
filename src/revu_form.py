@@ -320,7 +320,7 @@ _MISSION_BLOCKS = {
         "selling": "활성탄 흡착 탈취 · 미세먼지/초미세먼지 차단 · 전 차종 호환 · 정품/가성비",
         "m2": (
             "다음 핵심 포인트를 반드시 언급해주세요 → [필수 언급(확인·수정): {SELLING}]. "
-            "기존(순정/방치) 필터와 비교해 {benefit}이 어떻게 달라졌는지 솔직한 실사용 "
+            "기존(순정/방치) 필터와 비교해 {benefit}{josa} 어떻게 달라졌는지 솔직한 실사용 "
             "후기로 적고, 다양한 차종 호환 가능 점도 함께 언급해주세요."
         ),
         "m3": (
@@ -341,7 +341,7 @@ _MISSION_BLOCKS = {
         "selling": "저소음·떨림 저감 · 발수 코팅 · 물자국/번짐 개선 · 규격(사이즈) 호환 · 가성비",
         "m2": (
             "다음 핵심 포인트를 반드시 언급해주세요 → [필수 언급(확인·수정): {SELLING}]. "
-            "기존 와이퍼와 비교해 {benefit}이 어떻게 달라졌는지 솔직한 실사용 후기로 적고, "
+            "기존 와이퍼와 비교해 {benefit}{josa} 어떻게 달라졌는지 솔직한 실사용 후기로 적고, "
             "{cm}에 맞는 규격(사이즈) 호환 점도 함께 언급해주세요."
         ),
         "m3": (
@@ -362,7 +362,7 @@ _MISSION_BLOCKS = {
         "selling": "[제품 핵심 셀링포인트 2~3개 입력]",
         "m2": (
             "다음 핵심 포인트를 반드시 언급해주세요 → [필수 언급(확인·수정): {SELLING}]. "
-            "기존 제품과 비교해 {benefit}이 어떻게 달라졌는지 솔직한 실사용 후기로 적고, "
+            "기존 제품과 비교해 {benefit}{josa} 어떻게 달라졌는지 솔직한 실사용 후기로 적고, "
             "다양한 차종 호환 가능 점도 함께 언급해주세요."
         ),
         "m3": (
@@ -378,6 +378,17 @@ _MISSION_BLOCKS = {
         ],
     },
 }
+
+
+def _subject_josa(word: str) -> str:
+    """주격 조사 보정 — 마지막 '한글' 음절에 받침 있으면 "이", 없으면 "가".
+
+    한글이 없으면 "이". 괄호 등으로 끝나도 마지막 한글 음절을 찾아 판정
+    (예: "채터링)" → '링'은 받침 있음 → "이")."""
+    for ch in reversed(word):
+        if "가" <= ch <= "힣":
+            return "이" if (ord(ch) - 0xAC00) % 28 else "가"
+    return "이"
 
 
 def _product_kind(product_name: str) -> str:
@@ -408,7 +419,9 @@ def mission_block(car_model: str, product_name: str, angle_key: str) -> list[str
     angle = next(
         (a for a in block["angles"] if a[0] == angle_key), block["angles"][0])
     _key, _label, suffix, benefit = angle
-    fmt = dict(cm=cm, prod=prod, suffix=suffix, benefit=benefit, SELLING=block["selling"])
+    fmt = dict(
+        cm=cm, prod=prod, suffix=suffix, benefit=benefit,
+        josa=_subject_josa(benefit), SELLING=block["selling"])
     return [
         _MISSION1.format(**fmt),
         block["m2"].format(**fmt),
