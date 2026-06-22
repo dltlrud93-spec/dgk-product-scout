@@ -921,3 +921,33 @@ def test_restore_noop_when_no_backup():
     state = {}
     _restore(state)
     assert state == {}
+
+
+# ── 소스별 결과 캐시 맵(서명별 보관) ─────────────────────────────────────────
+def test_normalize_teamp_cache_legacy_and_none():
+    """구버전 단일 결과(dict with 'rows')·None·비-dict → 빈 맵으로 초기화."""
+    from src.core.teamp_mode import normalize_teamp_cache
+    assert normalize_teamp_cache(None) == {}
+    assert normalize_teamp_cache({"rows": [1], "signature": ("a",)}) == {}   # 구버전 단일
+    assert normalize_teamp_cache("x") == {}
+
+
+def test_normalize_teamp_cache_keeps_valid_map():
+    """이미 {signature: 결과} 맵이면 그대로 둔다."""
+    from src.core.teamp_mode import normalize_teamp_cache
+    sig_a = ("데이터로 차종 검색", (), "에어컨필터", 0)
+    m = {sig_a: {"rows": [1], "failed_items": [], "jp_failed": []}}
+    assert normalize_teamp_cache(m) is m
+
+
+def test_cache_map_keeps_results_per_signature():
+    """서명 A 저장 → B 저장 → A 유지(덮어쓰기 안 됨). 새로고침은 A만 제거, B 유지."""
+    from src.core.teamp_mode import normalize_teamp_cache
+    sig_a = ("데이터로 차종 검색", (), "에어컨필터", 0)
+    sig_b = ("키워드로 차종 검색", ("에어컨필터",), "", 0)
+    cm = normalize_teamp_cache(None)
+    cm[sig_a] = {"rows": ["A"], "failed_items": [], "jp_failed": []}
+    cm[sig_b] = {"rows": ["B"], "failed_items": [], "jp_failed": []}
+    assert cm[sig_a]["rows"] == ["A"] and cm[sig_b]["rows"] == ["B"]   # 둘 다 보존
+    cm.pop(sig_a, None)                       # 새로고침(A만)
+    assert sig_a not in cm and cm[sig_b]["rows"] == ["B"]   # B 유지

@@ -624,3 +624,13 @@ def restore_teamp_widgets(state, *, src_opts, jp_opts, sort_opts=None, top10_opt
         last_t10 = state.get("_teamp_last_top10_sort")
         if last_t10 in top10_opts and "teamp_top10_sort" not in state:
             state["teamp_top10_sort"] = last_t10
+
+
+def normalize_teamp_cache(raw):
+    """세션의 _teamp_results 를 {signature: 결과dict} 맵으로 정규화한다(순수).
+
+    소스별 결과를 서명(signature)별로 따로 보관하기 위한 맵. 구버전(단일 결과 dict,
+    'rows' 키 보유) 또는 None/비-dict 이면 빈 맵을 돌려준다(안전 초기화)."""
+    if not isinstance(raw, dict) or "rows" in raw:
+        return {}
+    return raw

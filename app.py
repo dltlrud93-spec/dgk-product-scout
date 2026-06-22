@@ -59,6 +59,7 @@ from src.core.teamp_mode import (
     format_recent_3m,
     format_recent_ratio,
     harvest_teamp_kw_items,
+    normalize_teamp_cache,
     restore_teamp_widgets,
     top_gold_kw_rows,
     top_gold_kw_rows_by_ratio,
@@ -419,7 +420,8 @@ _MEMBER_COLUMN_CONFIG = {
 # ── 화면별 session_state 결과 캐시 키 ────────────────────────────────────────
 _DEMAND_RESULTS_KEY = "_demand_results"
 _SEASONAL_RESULTS_KEY = "_seasonal_results"
-_TEAMP_RESULTS_KEY = "_teamp_results"
+_TEAMP_RESULTS_KEY = "_teamp_results"      # {signature: 결과dict} 맵(소스별 결과 보관)
+_TEAMP_LAST_SIG_KEY = "_teamp_last_sig"    # 마지막으로 본 서명(입력 없을 때 복원용)
 
 # 체험단 '키워드 소스' 표시 라벨(표시 전용). 분기는 use_assoc/use_jp 플래그로 — 라벨 변경에 안전.
 _SRC_ASSOC = "키워드로 차종 검색"   # 연관어 수확(제품 키워드 시드 → 네이버 연관어)
@@ -1068,9 +1070,9 @@ def _read_jogyeonpyo_models(worksheet: str, limit: int) -> list[str]:
 def render_teamp() -> None:
     _inject_css()
 
-    # 위젯 렌더 전: 캐시 조회 + 탭 복귀 시 사이드바 위젯 복원 (위젯 evict 대응)
+    # 위젯 렌더 전: 탭 복귀 시 사이드바 위젯 복원 (위젯 evict 대응)
     # ★제품키워드뿐 아니라 소스·데이터제품·정렬도 복원 — 안 하면 서명 리셋→캐시미스→재추출.
-    _cached = st.session_state.get(_TEAMP_RESULTS_KEY)
+    # (캐시 조회는 signature 계산 후 _cache_map.get(signature) 로 일원화)
     restore_teamp_widgets(
         st.session_state,
         src_opts=[_SRC_ASSOC, _SRC_DATA, _SRC_HYBRID],
@@ -1166,13 +1168,28 @@ def render_teamp() -> None:
     st.session_state["_teamp_last_sort"] = sort_label
     st.session_state["_teamp_last_top10_sort"] = top10_sort_label
 
+    # 요청 식별 서명 — 소스/제품키워드/조견표제품/상한이 같으면 세션 캐시 재사용.
+    # ★서명별 결과 맵(_cache_map)에 따로 보관 → 소스 바꿔도 이전 결과 안 사라짐(되돌아오면 즉시).
+    signature = (
+        source_label,
+        tuple(products) if use_assoc else (),
+        jp_product_label or "",
+        jp_limit if use_jp else 0,
+    )
+    valid_request = (use_assoc and bool(products)) or use_jp
+    jp_failed: list[str] = []
+
+    _cache_map = normalize_teamp_cache(st.session_state.get(_TEAMP_RESULTS_KEY))
+    _cached = _cache_map.get(signature)
+
     col_btn, col_note = st.columns([1, 4])
     with col_btn:
         if st.button("🔄 새로고침", key="teamp_refresh",
                      help="캐시를 비우고 검색광고+블로그+데이터를 다시 호출합니다."):
             _harvest_teamp_kw.clear()
             _read_jogyeonpyo_models.clear()
-            st.session_state.pop(_TEAMP_RESULTS_KEY, None)
+            _cache_map.pop(signature, None)   # ★현재 소스만 제거(다른 소스 결과 보존)
+            st.session_state[_TEAMP_RESULTS_KEY] = _cache_map
             for k in [k for k in st.session_state if k.startswith("_teamp_blog_")]:
                 del st.session_state[k]
             st.rerun()
@@ -1185,30 +1202,23 @@ def render_teamp() -> None:
     with st.expander("블로그 문서수 주의 · 한계", expanded=False):
         st.markdown(_TEAMP_LIMITS_MD)
 
-    # 요청 식별 서명 — 소스/제품키워드/조견표제품/상한이 같으면 세션 캐시 재사용(탭 전환 무재추출).
-    signature = (
-        source_label,
-        tuple(products) if use_assoc else (),
-        jp_product_label or "",
-        jp_limit if use_jp else 0,
-    )
-    valid_request = (use_assoc and bool(products)) or use_jp
-    jp_failed: list[str] = []
-
     if not valid_request:
-        # 입력 없음 — 캐시 있으면 탭 복귀로 보고 복원, 없으면 안내
-        if _cached is not None:
-            products = _cached.get("products", products)
-            rows = _cached["rows"]
-            failed_items = _cached["failed_items"]
-            jp_failed = _cached.get("jp_failed", [])
+        # 입력 없음 — 마지막으로 본 서명의 결과를 맵에서 복원, 없으면 안내
+        _last = st.session_state.get(_TEAMP_LAST_SIG_KEY)
+        _prev = _cache_map.get(_last) if _last else None
+        if _prev is not None:
+            products = _prev.get("products", products)
+            rows = _prev["rows"]
+            failed_items = _prev["failed_items"]
+            jp_failed = _prev.get("jp_failed", [])
         else:
             st.info("사이드바에서 키워드 소스를 고르고, 연관어 모드면 제품 키워드를 입력하세요.")
             return
-    elif _cached is not None and _cached.get("signature") == signature:
+    elif _cached is not None:   # ★현재 서명 결과가 맵에 있음(키가 곧 서명 — == 비교 불필요)
         rows = _cached["rows"]
         failed_items = _cached["failed_items"]
         jp_failed = _cached.get("jp_failed", [])
+        st.session_state[_TEAMP_LAST_SIG_KEY] = signature   # 빈 입력 복귀 대비 갱신
     else:
         # 새로 수집 — 소스·키워드·조견표제품 변경 또는 새로고침 시
         # ★조견표 읽기(st.secrets 접근)가 네이버 키를 플레이스홀더로 오염시킬 수 있어
@@ -1289,10 +1299,12 @@ def render_teamp() -> None:
             if jp_failed:
                 msg += f" 데이터 검색량 실패 {len(jp_failed)}건(429)."
             st.info(msg)
-            st.session_state[_TEAMP_RESULTS_KEY] = {
+            _cache_map[signature] = {
                 "signature": signature, "products": products,
                 "rows": [], "failed_items": [], "jp_failed": jp_failed,
             }
+            st.session_state[_TEAMP_RESULTS_KEY] = _cache_map
+            st.session_state[_TEAMP_LAST_SIG_KEY] = signature
             return
 
         total = len(kw_items)
@@ -1328,13 +1340,15 @@ def render_teamp() -> None:
             )
             prog_r.empty()
 
-        st.session_state[_TEAMP_RESULTS_KEY] = {
+        _cache_map[signature] = {
             "signature": signature,
             "products": products,
             "rows": rows,
             "failed_items": failed_items,
             "jp_failed": jp_failed,
         }
+        st.session_state[_TEAMP_RESULTS_KEY] = _cache_map
+        st.session_state[_TEAMP_LAST_SIG_KEY] = signature
 
     if not rows and not failed_items:
         if jp_failed:
