@@ -9,14 +9,25 @@ from __future__ import annotations
 
 from src.core.keyword_intent import INFO_KEYWORDS
 from src.revu_form import (
+    _product_kind,
     _subject_josa,
     default_mission_lines,
     mission_angles,
     mission_block,
+    mission_requires_car,
 )
 
-# 에어컨필터·와이퍼·generic(그 외) 모두 커버.
-_PRODUCTS = ["에어컨필터", "캐빈필터", "와이퍼", "방향제"]
+# 제품군 키 → 대표 제품명(분기 검증·전 제품 커버).
+KINDS = {
+    "airfilter": "에어컨필터",
+    "wiper": "와이퍼",
+    "glass": "유리복원제",
+    "navifilm": "네비게이션 보호필름",
+    "holder": "핸드폰 거치대",
+    "pump": "에어로닷 자전거 에어펌프",
+    "generic": "기타제품",
+}
+_PRODUCTS = list(KINDS.values())
 
 
 def _norm(s: str) -> str:
@@ -119,3 +130,42 @@ def test_richness_missions_are_long_enough():
     """3줄 미션이 빈약 템플릿이 아니라 리치(충분히 길다) — 5단 구조 압축."""
     lines = mission_block("EV5", "에어컨필터", "smell")
     assert len("".join(lines)) >= 300
+
+
+# ── 신규 제품군(유리복원제·네비필름·거치대·에어로닷) ─────────────────────────
+def test_product_kind_mapping():
+    for kind, prod in KINDS.items():
+        assert _product_kind(prod) == kind, f"{prod} → {kind} 기대"
+
+
+def test_new_products_have_angles_and_nonempty_block():
+    for prod in ["유리복원제", "네비게이션 보호필름", "핸드폰 거치대",
+                 "에어로닷 자전거 에어펌프"]:
+        angles = mission_angles(prod)
+        assert len(angles) >= 3, f"{prod}: 각도 3개 미만"
+        for key, _lab in angles:
+            lines = mission_block("쏘나타", prod, key)
+            assert len(lines) == 3 and all(ln.strip() for ln in lines)
+
+
+def test_pump_fills_without_car_model():
+    """에어로닷(car_specific=False)은 차종 없이도 미션이 채워진다 + 제목에 차종 없음."""
+    assert mission_requires_car("에어로닷 자전거 에어펌프") is False
+    lines = mission_block("", "에어로닷 자전거 에어펌프", "auto")
+    assert all(ln.strip() for ln in lines)
+    assert "에어로닷 자전거 에어펌프" in lines[0]   # 제품명은 들어가고
+    # NOCAR 템플릿이라 「 바로 뒤에 제품명(차종 자리·공백 누수 없음)
+    assert "「에어로닷" in lines[0]
+
+
+def test_car_specific_products_blank_without_car():
+    """차종 필수 제품(유리복원제·네비필름·거치대)은 차종 없으면 빈 3줄."""
+    for prod in ["유리복원제", "네비게이션 보호필름", "핸드폰 거치대"]:
+        assert mission_requires_car(prod) is True
+        assert mission_block("", prod, mission_angles(prod)[0][0]) == ["", "", ""]
+
+
+def test_pump_title_has_no_car_slot():
+    """NOCAR 제목 템플릿 — 차종을 주더라도 제품 펌프 제목엔 차종이 안 들어간다."""
+    lines = mission_block("쏘나타", "에어로닷 자전거 에어펌프", "auto")
+    assert "쏘나타" not in lines[0]

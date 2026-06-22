@@ -86,6 +86,7 @@ from src.revu_form import (
     merge_keywords,
     mission_angles,
     mission_block,
+    mission_requires_car,
     revu_form_defaults,
     save_filename_json,
     serialize_form,
@@ -1911,7 +1912,8 @@ def render_revu_form() -> None:
 
     # ── Step 6. 미션 (각도 선택 → 실데이터 기반 5단 미션 자동 채움, 수정 가능) ──
     st.subheader(f"6. {content_type} 미션 (1·2·3)")
-    if car_model.strip():
+    # 차종 필수 제품은 차종 입력 시, 차종 불필요 제품(자전거 펌프 등)은 항상 UI 표시.
+    if car_model.strip() or not mission_requires_car(product_name):
         _angles = mission_angles(product_name)
         _angle_labels = [lab for _key, lab in _angles]
         # 제품군이 바뀌면 이전 라벨이 새 옵션에 없을 수 있어 초기화(StreamlitAPIException 방지).

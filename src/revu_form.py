@@ -313,10 +313,16 @@ _MISSION1 = (
     "제목은 「{cm} {prod} {suffix}」 형식으로 작성해주세요. "
     "제목 키워드를 본문에 12회 이상 자연스럽게 넣고, 본문은 2000~2500자로 작성해주세요."
 )
+# 차종 불필요 제품(예: 자전거 펌프)용 — 제목에 차종을 넣지 않는다.
+_MISSION1_NOCAR = (
+    "제목은 「{prod} {suffix}」 형식으로 작성해주세요. "
+    "제목 키워드를 본문에 12회 이상 자연스럽게 넣고, 본문은 2000~2500자로 작성해주세요."
+)
 
 # 제품군별 미션2·3 + 기본 셀링포인트 + 각도표[(key,label,suffix,benefit)].
 _MISSION_BLOCKS = {
     "airfilter": {
+        "car_specific": True,
         "selling": "활성탄 흡착 탈취 · 미세먼지/초미세먼지 차단 · 전 차종 호환 · 정품/가성비",
         "m2": (
             "다음 핵심 포인트를 반드시 언급해주세요 → [필수 언급(확인·수정): {SELLING}]. "
@@ -338,6 +344,7 @@ _MISSION_BLOCKS = {
         ],
     },
     "wiper": {
+        "car_specific": True,
         "selling": "저소음·떨림 저감 · 발수 코팅 · 물자국/번짐 개선 · 규격(사이즈) 호환 · 가성비",
         "m2": (
             "다음 핵심 포인트를 반드시 언급해주세요 → [필수 언급(확인·수정): {SELLING}]. "
@@ -359,6 +366,7 @@ _MISSION_BLOCKS = {
         ],
     },
     "generic": {
+        "car_specific": True,
         "selling": "[제품 핵심 셀링포인트 2~3개 입력]",
         "m2": (
             "다음 핵심 포인트를 반드시 언급해주세요 → [필수 언급(확인·수정): {SELLING}]. "
@@ -377,6 +385,84 @@ _MISSION_BLOCKS = {
             ("price", "가성비", "가성비 후기", "가격 대비 만족도"),
         ],
     },
+    # ── 신규 제품군(거치대·필름·펌프는 '기존과 비교' 골격이 안 맞아 전용 미션) ──
+    "glass": {   # 유리복원제 — 복원 전·후 비교
+        "car_specific": True,
+        "selling": "유리 스크래치·돌빵자국 복원 · 잔기스/생활기스 제거 · 앞유리 흠집 개선 · 가성비",
+        "m2": (
+            "다음 핵심 포인트를 반드시 언급해주세요 → [필수 언급(확인·수정): {SELLING}]. "
+            "복원 전·후로 {benefit}{josa} 얼마나 개선됐는지 솔직한 실사용 후기로 적어주세요."
+        ),
+        "m3": (
+            "복원 전·후 같은 부위를 같은 각도로 찍은 비교 사진 8장 이상과 실제 작업 모습 "
+            "동영상 1개 이상을 첨부하고, 흠집이 사라진 부분이 잘 보이게 대표 사진을 지정해주세요. "
+            "AI로 생성한 이미지·영상은 사용 금지입니다. 포스팅 하단에 구매처 링크를 삽입해주세요. "
+            "(미션 미준수 시 수정 요청이 있을 수 있습니다.)"
+        ),
+        "angles": [
+            ("scratch", "잔기스 제거", "잔기스 복원 후기", "잔기스·생활기스"),
+            ("stone", "돌빵 복원", "돌빵자국 복원 후기", "돌빵자국·흠집"),
+            ("front", "앞유리 복원", "앞유리 흠집 복원 후기", "앞유리 흠집·선명도"),
+        ],
+    },
+    "navifilm": {   # 네비게이션 보호필름 — 적용 전·후 화면 비교
+        "car_specific": True,
+        "selling": "기스·지문 방지 · 저반사 시인성 · 터치감 유지 · 차량 모델별 전용 재단",
+        "m2": (
+            "다음 핵심 포인트를 반드시 언급해주세요 → [필수 언급(확인·수정): {SELLING}]. "
+            "필름 적용 후 {benefit}{josa} 어떤지 솔직한 실사용 후기로 적고, 본인 차량 내비 "
+            "모델에 맞는 전용 재단 점도 함께 언급해주세요."
+        ),
+        "m3": (
+            "필름 적용 전·후 화면 비교 사진 8장 이상과 빛 반사·지문 차이가 보이는 사진을 "
+            "첨부해주세요. AI로 생성한 이미지·영상은 사용 금지입니다. 본인 차량 내비 모델을 "
+            "확인해 신청하시고, 포스팅 하단에 구매처 링크를 삽입해주세요. "
+            "(미션 미준수 시 수정 요청이 있을 수 있습니다.)"
+        ),
+        "angles": [
+            ("scratch", "기스·지문 방지", "기스·지문 방지 후기", "지문·잔기스 방지"),
+            ("clarity", "저반사·시인성", "저반사 후기", "저반사·화면 시인성"),
+            ("touch", "터치감", "터치감 후기", "터치감·조작감"),
+        ],
+    },
+    "holder": {   # 핸드폰 거치대 — 거치/고정 모습
+        "car_specific": True,
+        "selling": "흔들림 없는 고정력 · 송풍구/대시보드 거치 · 무선충전 · 각도조절",
+        "m2": (
+            "다음 핵심 포인트를 반드시 언급해주세요 → [필수 언급(확인·수정): {SELLING}]. "
+            "거치 시 {benefit}{josa} 어떤지 솔직한 실사용 후기로 적어주세요."
+        ),
+        "m3": (
+            "송풍구나 대시보드에 거치한 모습과 휴대폰을 올린 사진 7장 이상과 주행 중 흔들림 "
+            "없이 고정되는 동영상 1개 이상을 첨부해주세요. AI로 생성한 이미지·영상은 사용 "
+            "금지입니다. 포스팅 하단에 구매처 링크를 삽입해주세요. "
+            "(미션 미준수 시 수정 요청이 있을 수 있습니다.)"
+        ),
+        "angles": [
+            ("grip", "고정력", "흔들림 없는 거치대 후기", "흔들림 없는 고정력"),
+            ("charge", "무선충전", "무선충전 거치대 후기", "무선충전 편의"),
+            ("angle", "각도조절", "각도조절 거치대 후기", "화면 각도·시야"),
+        ],
+    },
+    "pump": {   # 에어로닷(자전거 미니 전동 에어펌프) — ★차종 불필요
+        "car_specific": False,
+        "selling": "전동 자동 공기주입 · 휴대용 충전식 · 프리셋 공기압 설정 · 자전거 겸용",
+        "m2": (
+            "다음 핵심 포인트를 반드시 언급해주세요 → [필수 언급(확인·수정): {SELLING}]. "
+            "자전거 타이어에 공기 주입 시 {benefit}{josa} 어떤지 솔직한 실사용 후기로 적어주세요."
+        ),
+        "m3": (
+            "실제 공기 주입 과정과 공기압 게이지 수치가 보이는 사진 7장 이상과 작동 모습 "
+            "동영상 1개 이상을 첨부하고, 프리셋 공기압 설정 화면을 함께 보여주세요. "
+            "AI로 생성한 이미지·영상은 사용 금지입니다. 포스팅 하단에 구매처 링크를 "
+            "삽입해주세요. (미션 미준수 시 수정 요청이 있을 수 있습니다.)"
+        ),
+        "angles": [
+            ("auto", "자동주입", "전동 자동주입 후기", "전동 자동주입 편리함"),
+            ("portable", "휴대·충전", "휴대용 충전식 후기", "충전식 휴대 편의"),
+            ("preset", "공기압 정확도", "프리셋 공기압 후기", "프리셋 공기압 정확도"),
+        ],
+    },
 }
 
 
@@ -392,12 +478,20 @@ def _subject_josa(word: str) -> str:
 
 
 def _product_kind(product_name: str) -> str:
-    """제품명 → 미션 분기 키. 와이퍼 우선, 그다음 필터/에어컨/캐빈, 그 외 generic."""
+    """제품명 → 미션 분기 키. 더 구체적인 제품을 먼저 판정, 그 외 generic."""
     p = product_name or ""
     if "와이퍼" in p:
         return "wiper"
     if ("필터" in p) or ("에어컨" in p) or ("캐빈" in p):
         return "airfilter"
+    if ("유리복원" in p) or ("유리 복원" in p):
+        return "glass"
+    if ("보호필름" in p) or ("네비" in p) or ("내비" in p) or ("필름" in p):
+        return "navifilm"
+    if ("거치대" in p) or ("거치" in p):
+        return "holder"
+    if ("에어로닷" in p) or ("에어펌프" in p) or ("공기주입" in p) or ("펌프" in p):
+        return "pump"
     return "generic"
 
 
@@ -407,26 +501,31 @@ def mission_angles(product_name: str) -> list[tuple[str, str]]:
     return [(key, label) for key, label, _suffix, _benefit in block["angles"]]
 
 
-def mission_block(car_model: str, product_name: str, angle_key: str) -> list[str]:
-    """차종·제품·각도로 리치 5단 구조 미션 3줄을 만든다(수정 가능). 차종 없으면 빈 3줄.
+def mission_requires_car(product_name: str) -> bool:
+    """이 제품 미션이 차종을 필요로 하는가(자전거 펌프 등은 False)."""
+    return _MISSION_BLOCKS[_product_kind(product_name)].get("car_specific", True)
 
-    angle_key 가 해당 제품군에 없으면 첫 각도로 폴백. 🔴정보형 단어는 ★쓰지 않는다."""
+
+def mission_block(car_model: str, product_name: str, angle_key: str) -> list[str]:
+    """차종·제품·각도로 리치 5단 구조 미션 3줄을 만든다(수정 가능).
+
+    angle_key 가 해당 제품군에 없으면 첫 각도로 폴백. 🔴정보형 단어는 ★쓰지 않는다.
+    차종 필수 제품(car_specific=True)인데 차종이 없으면 빈 3줄. 차종 불필요 제품
+    (예: 자전거 펌프)은 차종 없이도 채우고 제목에 차종을 넣지 않는다."""
     cm = (car_model or "").strip()
-    if not cm:
+    block = _MISSION_BLOCKS[_product_kind(product_name)]
+    car_specific = block.get("car_specific", True)
+    if car_specific and not cm:
         return ["", "", ""]
     prod = (product_name or "").strip() or "제품"
-    block = _MISSION_BLOCKS[_product_kind(product_name)]
     angle = next(
         (a for a in block["angles"] if a[0] == angle_key), block["angles"][0])
     _key, _label, suffix, benefit = angle
     fmt = dict(
         cm=cm, prod=prod, suffix=suffix, benefit=benefit,
         josa=_subject_josa(benefit), SELLING=block["selling"])
-    return [
-        _MISSION1.format(**fmt),
-        block["m2"].format(**fmt),
-        block["m3"].format(**fmt),
-    ]
+    m1 = (_MISSION1 if car_specific else _MISSION1_NOCAR).format(**fmt)
+    return [m1, block["m2"].format(**fmt), block["m3"].format(**fmt)]
 
 
 def default_mission_lines(car_model: str, product_name: str) -> list[str]:

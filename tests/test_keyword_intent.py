@@ -113,6 +113,27 @@ def test_annotate_intent_preserves_order():
     assert annotate_intent(pairs) == [("추천", 5, "buy"), ("교체방법", 3, "info")]
 
 
+# ── 신규 제품군(유리복원제·네비필름·거치대·에어로닷) 분류 ────────────────────
+@pytest.mark.parametrize("kw, expected", [
+    ("돌빵자국", "buy"),
+    ("차유리복원제", "buy"),
+    ("유리복원제사용법", "info"),       # 공통 신규 '사용법'
+    ("유리복원제바르는법", "info"),     # 공통 신규 '바르는법'
+    ("네비게이션보호필름지문방지", "buy"),
+    ("보호필름붙이는법", "info"),       # 공통 신규 '붙이는법'
+    ("차량용핸드폰거치대무선충전", "buy"),
+    ("거치대다는법", "info"),           # 공통 신규 '다는법'
+    ("자전거에어펌프", "buy"),
+    ("에어펌프작동법", "info"),         # 공통 신규 '작동법'
+    ("프레스타", "buy"),
+    ("에어컨필터사용법", "info"),       # 기존 제품도 공통 '사용법' 반영
+    ("파는곳", "buy"),                  # 공통 구매형 신규
+    ("판매처", "buy"),
+])
+def test_new_product_intent_cases(kw, expected):
+    assert classify_intent(kw) == expected
+
+
 def test_badge_and_rank_tables_consistent():
     assert set(BADGE) == set(INTENT_RANK) == {"buy", "mid", "info"}
     assert INTENT_RANK == {"buy": 0, "mid": 1, "info": 2}
