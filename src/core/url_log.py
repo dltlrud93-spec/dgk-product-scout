@@ -30,19 +30,29 @@ def build_log_row(now_kst, product_code, car, product_no, medium, detail, url) -
     ]
 
 
+def _non_empty_rows(vals: list) -> list:
+    """완전 빈 행(모든 셀이 공백)은 제외한 '실데이터 행'만 추린다.
+
+    새 구글 시트의 get_all_values() 는 [['']] 같은 빈 칸 한 줄을 주기도 해서,
+    이를 '빈 시트'로 올바로 판별하려면 이 정규화가 필요하다."""
+    return [v for v in vals if any(str(c).strip() for c in v)]
+
+
 def write_log_row(ws, row: list, header: list = LOG_HEADER) -> str:
     """worksheet 유사객체에 한 줄 추가(순수 — I/O 예외는 호출부가 처리).
 
-    빈 시트면 헤더 먼저 추가. URL열(마지막열)에 같은 URL 이 이미 있으면 'duplicate'
-    (append 안 함). 그 외 append 후 'saved'.
+    진짜 빈 시트(또는 빈 칸뿐)면 헤더+행. 데이터는 있는데 헤더가 없으면 헤더를 1행에 삽입
+    (기존 깨진 상태 보정). URL열(마지막열) 중복이면 'duplicate', 그 외 append 후 'saved'.
     """
-    vals = ws.get_all_values()
-    if not vals:
+    non_empty = _non_empty_rows(ws.get_all_values())
+    if not non_empty:
         ws.append_row(header)
         ws.append_row(row)
         return "saved"
+    if non_empty[0] != header:               # 데이터만 있고 헤더 없음 → 보정
+        ws.insert_row(header, index=1)
     url = row[-1]
-    for existing in vals:
+    for existing in non_empty:               # 헤더 유무와 무관하게 URL 마지막열 비교
         if existing and existing[-1] == url:
             return "duplicate"
     ws.append_row(row)
@@ -85,8 +95,12 @@ def append_url_log(
         return "error"
 
 
-def fetch_recent_logs(n: int = 10, *, sheet_id: Optional[str] = None, creds=None) -> list:
-    """최근 이력 n행을 최신순(위가 최신)으로 반환. 실패·빈 결과는 []."""
+def fetch_recent_logs(
+    n: int = 10, *, sheet_id: Optional[str] = None, creds=None, header: list = LOG_HEADER,
+) -> list:
+    """최근 이력 n행을 최신순(위가 최신)으로 반환. 실패·빈 결과는 [].
+
+    ★헤더가 1행일 때만 제거하고, 헤더 없는(깨진) 시트는 전체를 데이터로 본다."""
     try:
         sid = _resolve_log_sheet_id(sheet_id)
         if not sid:
@@ -94,8 +108,8 @@ def fetch_recent_logs(n: int = 10, *, sheet_id: Optional[str] = None, creds=None
         from src.core.jogyeonpyo import _authorize
 
         ws = _authorize(creds).open_by_key(sid).sheet1
-        vals = ws.get_all_values()
-        body = vals[1:]              # 헤더 제외
+        non_empty = _non_empty_rows(ws.get_all_values())
+        body = non_empty[1:] if (non_empty and non_empty[0] == header) else non_empty
         return list(reversed(body[-n:])) if body else []
     except Exception:  # noqa: BLE001
         _log.exception("fetch_recent_logs 실패")   # ★진단용 전체 트레이스백

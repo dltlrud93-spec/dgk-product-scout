@@ -8,14 +8,16 @@ from datetime import datetime
 
 from src.core.url_log import (
     LOG_HEADER,
+    _non_empty_rows,
     _resolve_log_sheet_id,
     build_log_row,
+    fetch_recent_logs,
     write_log_row,
 )
 
 
 class FakeWS:
-    """worksheet 유사객체 — get_all_values()/append_row() 만."""
+    """worksheet 유사객체 — get_all_values()/append_row()/insert_row()."""
 
     def __init__(self, rows=None):
         self.rows = [list(r) for r in (rows or [])]
@@ -25,6 +27,27 @@ class FakeWS:
 
     def append_row(self, r):
         self.rows.append(list(r))
+
+    def insert_row(self, r, index=1):
+        self.rows.insert(index - 1, list(r))    # gspread index 는 1-based
+
+
+class _FakeClient:
+    """_authorize 대역 — open_by_key().sheet1 로 FakeWS 반환."""
+
+    def __init__(self, ws):
+        self._ws = ws
+
+    def open_by_key(self, _sid):
+        return self
+
+    @property
+    def sheet1(self):
+        return self._ws
+
+
+def _patch_authorize(monkeypatch, ws):
+    monkeypatch.setattr("src.core.jogyeonpyo._authorize", lambda creds=None: _FakeClient(ws))
 
 
 def test_build_log_row_fields_and_order():
@@ -66,6 +89,46 @@ def test_write_log_row_new_url_appends():
     assert write_log_row(ws, new) == "saved"
     assert len(ws.rows) == 3
     assert ws.rows[-1][-1] == "https://u/2"
+
+
+def test_write_log_row_blank_cell_sheet_writes_header():
+    """새 시트 get_all_values()=[['']] (빈 칸 한 줄) → 빈 시트로 보고 헤더+행."""
+    ws = FakeWS([[""]])
+    row = build_log_row(datetime(2026, 6, 22, 9, 5), "와이퍼", "EV5", "1", "N_REVU",
+                        "d", "https://u/1")
+    assert write_log_row(ws, row) == "saved"
+    ne = _non_empty_rows(ws.rows)
+    assert ne[0] == LOG_HEADER      # 실데이터 첫 행이 헤더
+    assert ne[1] == row
+    assert len(ne) == 2
+
+
+def test_write_log_row_inserts_header_when_missing():
+    """헤더 없이 데이터행만 있는(기존 깨진) 시트 → 헤더를 1행에 삽입 후 신규 append."""
+    data_only = ["t", "와이퍼", "EV5", "1", "N_REVU", "d", "https://u/1"]
+    ws = FakeWS([data_only])
+    new = build_log_row(datetime(2026, 6, 22, 9, 7), "에어컨필터", "쏘렌토", "2",
+                        "N_REVU", "d2", "https://u/2")
+    assert write_log_row(ws, new) == "saved"
+    assert ws.rows[0] == LOG_HEADER         # 헤더가 1행에 삽입됨
+    assert ws.rows[-1][-1] == "https://u/2"  # 신규 append
+
+
+def test_fetch_recent_logs_headerless_returns_data(monkeypatch):
+    """헤더 없는 [[데이터]] → 데이터 반환(빈 [] 아님)."""
+    data = ["t", "와이퍼", "EV5", "1", "N_REVU", "d", "https://u/1"]
+    _patch_authorize(monkeypatch, FakeWS([data]))
+    out = fetch_recent_logs(10, sheet_id="x")
+    assert out == [data]
+
+
+def test_fetch_recent_logs_strips_header_when_present(monkeypatch):
+    """헤더+데이터 → 헤더 제외하고 데이터만, 최신순(위가 최신)."""
+    d1 = ["t1", "와이퍼", "EV5", "1", "N_REVU", "d", "https://u/1"]
+    d2 = ["t2", "에어컨필터", "쏘렌토", "2", "N_REVU", "d2", "https://u/2"]
+    _patch_authorize(monkeypatch, FakeWS([LOG_HEADER, d1, d2]))
+    out = fetch_recent_logs(10, sheet_id="x")
+    assert out == [d2, d1]      # 헤더 제외 + 역순(최신 위)
 
 
 def test_resolve_log_sheet_id_arg_wins():
