@@ -49,6 +49,17 @@ def test_render_revu_form_no_exception():
     assert not at.exception, f"render_revu_form 에서 예외: {at.exception}"
 
 
+def test_render_revu_form_has_four_tabs():
+    """7개 섹션이 st.tabs 4개로 그룹핑돼 렌더되고, 탭 밖 RevuFormData 조립까지 도달한다.
+
+    탭은 매 실행마다 4개 모두 렌더 → 모든 위젯 인스턴스화 → 탭 밖 docx 다운로드 위젯이
+    정상 생성된다(조립 실패 시 download_button 이 사라져 실패)."""
+    at = _open_revu_form()
+    assert not at.exception, f"탭 렌더 예외: {at.exception}"
+    assert len(at.tabs) == 4, f"탭이 4개가 아님: {len(at.tabs)}"
+    assert len(at.get("download_button")) >= 1   # RevuFormData→build_revu_docx 도달
+
+
 def test_render_revu_form_has_option_radios():
     """Step1 옵션 라디오 3개(콘텐츠 타입·구매평 결합·긴급 진행)가 렌더된다."""
     at = _open_revu_form()
