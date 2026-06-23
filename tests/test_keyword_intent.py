@@ -134,6 +134,14 @@ def test_new_product_intent_cases(kw, expected):
     assert classify_intent(kw) == expected
 
 
+def test_intent_jul_substring_fixed():
+    """1글자 '줄' 오분류 수정: '줄무늬/줄자국'만 구매형, '물줄기·줄눈'은 오분류 안 됨."""
+    assert classify_intent("물줄기") != "buy"      # '줄' 부분일치 제거 → mid
+    assert classify_intent("줄눈시공") != "buy"    # 줄눈(타일) 오분류 제거
+    assert classify_intent("와이퍼 줄무늬") == "buy"   # 줄무늬 불만 의도 유지
+    assert classify_intent("와이퍼 줄자국") == "buy"   # 줄자국 불만 의도 유지
+
+
 def test_badge_and_rank_tables_consistent():
     assert set(BADGE) == set(INTENT_RANK) == {"buy", "mid", "info"}
     assert INTENT_RANK == {"buy": 0, "mid": 1, "info": 2}

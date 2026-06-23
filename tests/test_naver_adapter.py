@@ -365,6 +365,34 @@ def test_non_200_raises_with_status():
 
 
 # ---------------------------------------------------------------------------
+# HTTP 타임아웃: 실제 requests.get 경로에만 timeout=(5,20), 주입 경로는 미부착
+# ---------------------------------------------------------------------------
+def test_do_get_passes_timeout_on_real_path(monkeypatch):
+    # http_get 미주입 → _do_get 이 requests.get 을 타며 timeout=(5,20) 을 넘긴다.
+    captured = {}
+
+    def fake_get(url, params=None, headers=None, **kwargs):
+        captured.update(url=url, params=params, headers=headers, kwargs=kwargs)
+        return FakeResp(200, {"keywordList": []})
+
+    monkeypatch.setattr("requests.get", fake_get)
+    a = NaverAdapter(["로봇청소기"], **KEYS)  # http_get 미주입 → 실제 경로
+    a._do_get("https://x/keywordstool", {"p": 1}, {"h": 1})
+    assert captured["kwargs"].get("timeout") == (5, 20)
+
+    # 주입 경로는 timeout 인자 없이 호출(가짜 getter가 timeout 을 안 받아도 안전).
+    seen = {}
+
+    def injected(url, params=None, headers=None):  # timeout 미수용 시그니처
+        seen.update(url=url, params=params, headers=headers)
+        return FakeResp(200, {"keywordList": []})
+
+    b = _adapter(["로봇청소기"], injected)
+    b._do_get("https://x/keywordstool", {"p": 1}, {"h": 1})  # TypeError 없이 호출돼야
+    assert seen["url"].endswith("/keywordstool")
+
+
+# ---------------------------------------------------------------------------
 # 인터페이스 계약
 # ---------------------------------------------------------------------------
 def test_returns_category_observations():

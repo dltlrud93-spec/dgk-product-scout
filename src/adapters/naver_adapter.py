@@ -166,7 +166,9 @@ class NaverAdapter(DataAdapter):
         if getter is None:
             import requests  # 지연 import: 테스트는 http_get 주입으로 의존 없이 동작.
 
-            getter = requests.get
+            # ★타임아웃 (연결 5초, 응답 20초). 네이버 무응답 시 앱 무한대기 → 화면 멈춤 방지.
+            # 주입된 http_get(테스트)은 timeout 인자를 안 받을 수 있어 실제 경로에만 붙인다.
+            return requests.get(url, params=params, headers=headers, timeout=(5, 20))
         return getter(url, params=params, headers=headers)
 
     def _retry_wait(self, resp, attempt: int) -> float:
