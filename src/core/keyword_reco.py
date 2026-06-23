@@ -95,6 +95,8 @@ _BASE_BLOG_STOPWORDS = frozenset({
     # 일반 부사·연결어
     "정도", "진짜", "완전", "너무", "아주", "매우", "그리고", "또는", "하지만",
     "그래서", "근데", "그리고요", "어떻게", "무엇", "어디", "언제", "왜",
+    # 영문 연결어 노이즈(소문자 매칭)
+    "vs",
 })
 
 # 차량 일반어·구매/스펙어·브랜드(제조사) — 에어컨필터·와이퍼와 ★무관한 노이즈.
@@ -162,6 +164,22 @@ def _title_has_product(title: str, product_terms) -> bool:
     return any(w in t for w in product_terms)
 
 
+# 여러 글자 조사/어미 — 떼도 안전(검증: 최저가·도로·각도·길이·깊이·원가·효과 등 0손상).
+# ★긴 것부터 나열(에서는 > 에서). 1글자 조사(가/는/을/로/에/도/의/와/과/이)는 넣지 않는다
+# — 진짜 명사 끝에 와서 손상 위험(최저가→최저·도로→도).
+_JOSA_SUFFIXES = ("에서는", "으로는", "에게서", "한테서", "이라고", "이라는",
+                  "에서", "까지", "으로", "에게", "한테", "처럼", "보다", "마다",
+                  "부터", "라고", "라는")
+
+
+def _strip_josa(tok: str) -> str:
+    """토큰 끝의 안전한 여러글자 조사를 1회 제거(남는 길이 ≥ 2 일 때만)."""
+    for suf in _JOSA_SUFFIXES:          # 긴 것 먼저
+        if tok.endswith(suf) and len(tok) - len(suf) >= 2:
+            return tok[: -len(suf)]
+    return tok
+
+
 def extract_title_keywords(
     titles: list[str],
     seed: str,
@@ -199,6 +217,7 @@ def extract_title_keywords(
     for idx, title in enumerate(titles):
         seen: set[str] = set()     # 이 제목에서 이미 센 토큰(제목 단위 1회)
         for tok in _TITLE_TOKEN_RE.findall(title or ""):
+            tok = _strip_josa(tok)         # ★조사 정규화(변형 병합: 발수코팅까지→발수코팅)
             low = tok.lower()
             if low in seen:
                 continue

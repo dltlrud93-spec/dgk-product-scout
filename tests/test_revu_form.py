@@ -456,6 +456,32 @@ def test_extract_title_keywords_counts_per_title_once():
     assert kws["교체"] == 2   # 제목 2개에 등장 → 2 (총 4회가 아님)
 
 
+def test_strip_josa_merges_and_is_safe():
+    """조사 정규화: 변형 병합 + seed 제거 + ★1글자 조사 손상 금지 + vs 노이즈 제외."""
+    # ① 여러글자 조사 제거로 변형이 한 키워드로 병합(발수코팅까지 → 발수코팅)
+    merged = dict(extract_title_keywords(
+        ["발수코팅까지 좋아요", "발수코팅 추천"], "테스트"))
+    assert merged.get("발수코팅") == 2          # '까지'형 따로 안 생기고 2로 병합
+    assert "발수코팅까지" not in merged
+
+    # ② "와이퍼에서" → "와이퍼"(seed)로 정규화되어 걸러진다
+    words = [k for k, _ in extract_title_keywords(["와이퍼에서 소리"], "와이퍼")]
+    assert "와이퍼" not in words and "와이퍼에서" not in words
+    assert "소리" in words
+
+    # ③ ★손상 금지: 1글자 조사는 절대 안 뗀다(최저가→최저·도로→도·각도→각 아님)
+    safe = [k for k, _ in extract_title_keywords(
+        ["최저가 비교", "도로 주행", "각도 조절"], "테스트")]
+    assert "최저가" in safe and "최저" not in safe
+    assert "도로" in safe and "도" not in safe
+    assert "각도" in safe and "각" not in safe
+
+    # ④ 영문 연결어 vs 노이즈 제외
+    vs_words = [k.lower() for k, _ in extract_title_keywords(
+        ["발수 vs 그래핀 와이퍼"], "테스트")]
+    assert "vs" not in vs_words
+
+
 def test_recommend_blog_keywords_with_injected_titles():
     """titles 직접 주입(fetch_blog_titles 가 이미 HTML 정제한 형태) → 키워드 추출 +
     원문 제목 그대로 보존 + 금지어 분리(네트워크 없음)."""
