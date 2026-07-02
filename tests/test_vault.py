@@ -7,10 +7,17 @@ from __future__ import annotations
 from src.core.vault import (
     VAULT_HEADER,
     append_vault_rows,
+    detect_demand_formation,
+    executed_keywords_from_logs,
+    filter_latest_rows,
     get_or_create_worksheet,
+    group_vault_rows,
     latest_by_keyword,
+    latest_rows,
     make_vault_row,
+    new_keywords,
     parse_vault_values,
+    summarize_vault,
 )
 
 
@@ -169,3 +176,102 @@ def test_latest_by_keyword_single_has_no_prev():
 def test_latest_by_keyword_skips_blank_keyword():
     m = latest_by_keyword([_row("", "2026-01-15 09:00")])
     assert m == {}
+
+
+# ── 뷰 로직: 칩·수요형성·NEW·필터·그룹핑 ──────────────────────────────────────
+
+def _drow(keyword, product="에어컨필터", status="정상", grade="🟡 황금",
+          scanned_at="2026-02-01 09:00", volume="1000", opp="500", doc="50",
+          ratio="0.05", recent="3"):
+    return {
+        "scanned_at": scanned_at, "product": product, "car_model": keyword,
+        "keyword": keyword, "volume": volume, "doc_count": doc, "ratio": ratio,
+        "grade": grade, "recent_3m": recent, "opportunity_score": opp, "status": status,
+    }
+
+
+def test_summarize_vault_counts_by_bucket():
+    rows = [
+        _drow("a", grade="🟡 황금"),
+        _drow("b", grade="🟢 해볼만"),
+        _drow("c", grade="🔴 포화/후순위"),
+        _drow("d", status="잠복", grade="", opp="", doc="", ratio="", recent=""),
+    ]
+    s = summarize_vault(rows, executed=frozenset({"a"}))
+    assert s["total"] == 4
+    assert s["gold"] == 1 and s["ok"] == 1 and s["saturated"] == 1 and s["dormant"] == 1
+    assert s["executed"] == 1
+
+
+def test_detect_demand_formation_latest_normal_prev_dormant():
+    rows = [
+        _drow("셀토스에어컨필터", status="잠복", grade="", scanned_at="2026-01-01 09:00", volume="5"),
+        _drow("셀토스에어컨필터", status="정상", grade="🟡 황금", scanned_at="2026-02-01 09:00", volume="120"),
+        _drow("모닝에어컨필터", status="정상", scanned_at="2026-02-01 09:00"),  # 직전 없음
+    ]
+    formed = detect_demand_formation(rows)
+    assert formed == [("셀토스에어컨필터", "120")]
+
+
+def test_new_keywords_only_single_appearance():
+    rows = [
+        _drow("a", scanned_at="2026-01-01 09:00"),
+        _drow("a", scanned_at="2026-02-01 09:00"),  # 2회 → NEW 아님
+        _drow("b", scanned_at="2026-02-01 09:00"),  # 1회 → NEW
+    ]
+    assert new_keywords(rows) == {"b"}
+
+
+def test_filter_latest_rows_exclude_executed():
+    rows = [_drow("a"), _drow("b")]
+    out = filter_latest_rows(rows, exclude_executed=True, executed=frozenset({"a"}))
+    assert [r["keyword"] for r in out] == ["b"]
+
+
+def test_filter_latest_rows_by_product():
+    rows = [_drow("a", product="에어컨필터"), _drow("b", product="와이퍼")]
+    out = filter_latest_rows(rows, product="와이퍼")
+    assert [r["keyword"] for r in out] == ["b"]
+    assert filter_latest_rows(rows, product="전체") == rows  # '전체'는 필터 없음
+
+
+def test_group_vault_rows_orders_gold_by_opportunity_desc():
+    rows = [
+        _drow("low", grade="🟡 황금", opp="100"),
+        _drow("high", grade="🟡 황금", opp="900"),
+        _drow("dorm", status="잠복", grade="", opp=""),
+    ]
+    gold, ok, saturated, dormant = group_vault_rows(rows)
+    assert [r["keyword"] for r in gold] == ["high", "low"]   # 기회 점수 내림차순
+    assert len(dormant) == 1
+
+
+def test_latest_rows_uses_latest_only():
+    rows = [
+        _drow("a", scanned_at="2026-01-01 09:00", volume="5", status="잠복", grade=""),
+        _drow("a", scanned_at="2026-02-01 09:00", volume="120", status="정상"),
+    ]
+    lr = latest_rows(rows)
+    assert len(lr) == 1
+    assert lr[0]["volume"] == "120"   # 최신 행
+
+
+# ── 집행됨: URL 이력 (제품·차종) → build_keyword 재구성 ────────────────────────
+
+def test_executed_keywords_from_logs_reconstructs_keyword():
+    # LOG_HEADER: 생성일시|제품|차종|상품번호|... — product_idx=1, car_idx=2
+    logs = [
+        ["2026-06-22 09:05", "에어컨필터", "셀토스", "1", "N_REVU", "d", "https://u/1"],
+        ["2026-06-22 09:06", "와이퍼", "그랑 콜레오스", "2", "N_REVU", "d", "https://u/2"],
+    ]
+    got = executed_keywords_from_logs(logs)
+    assert "셀토스에어컨필터" in got
+    assert "그랑콜레오스와이퍼" in got   # 정규화(내부 공백 제거) 후 build_keyword 와 동일
+
+
+def test_executed_keywords_skips_header_and_blank():
+    logs = [
+        ["생성일시", "제품", "차종", "상품번호", "nt_medium", "nt_detail", "URL"],  # 헤더
+        ["t", "", "", "", "", "", ""],                                              # 빈행
+    ]
+    assert executed_keywords_from_logs(logs) == set()

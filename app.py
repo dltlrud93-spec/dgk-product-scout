@@ -70,8 +70,23 @@ from src.core.teamp_mode import (
 )
 from src.core.jogyeonpyo import (
     harvest_jogyeonpyo_kw_items,
+    keyword_volumes,
     read_car_models,
 )
+from src.core.vault import (
+    append_vault_rows,
+    detect_demand_formation,
+    executed_keywords_from_logs,
+    filter_latest_rows,
+    format_recent_int,
+    group_vault_rows,
+    latest_rows as vault_latest_rows,
+    new_keywords,
+    open_vault_worksheet,
+    read_vault,
+    summarize_vault,
+)
+from src.core.scanner import plan_scan, scan_models
 from src.core.search_volume import (
     FIELD_COMP_IDX,
     FIELD_MONTHLY_MOBILE,
@@ -360,7 +375,9 @@ def _load_car_demand():
 
     표 포맷은 하지 않는다 — 파이프라인 결과(ModelRow/Trend)를 그대로 돌려주고
     렌더는 호출부가 st.dataframe 으로 한다(터미널 표 포맷 중복 없음)."""
-    idx = load_car_models()
+    idx = _recognition_index()   # JSON + 데이터 차종 별칭(신차 인식) — 시트 실패 시 JSON 폴백
+    # 별칭 병합이 st.secrets 를 건드려 네이버 키를 오염시킬 수 있어 어댑터 생성 직전 재확정.
+    _ensure_naver_env()
     seeds = config.CAR_PART_SEEDS
     adapter = NaverAdapter([s for ss in seeds.values() for s in ss])  # NAVER_AD_* 키 검증
     agg = harvest_models(adapter, seeds, idx)
@@ -1104,6 +1121,301 @@ def _read_jogyeonpyo_models(worksheet: str, limit: int) -> list[str]:
         sheet_id=_jogyeonpyo_sheet_id(),
         limit=limit,
     )
+
+
+@st.cache_data(ttl=config.JOGYEONPYO_CACHE_TTL, show_spinner=False)
+def _sheet_car_names() -> tuple[str, ...]:
+    """인식 사전 병합용 — 데이터 두 탭(에어컨필터·와이퍼_전면) 차종명(중복 제거, 순서 유지).
+
+    시트 읽기는 기존 6시간 캐시 함수(_read_jogyeonpyo_models) 재사용 → 추가 네트워크 0.
+    탭별 실패는 조용히 건너뛴다(전체 실패면 빈 튜플 → JSON 폴백).
+    """
+    names: list[str] = []
+    for conf in config.JOGYEONPYO_PRODUCTS.values():
+        try:
+            names += _read_jogyeonpyo_models(conf["worksheet"], None)  # None=전체
+        except Exception:  # noqa: BLE001 — 시트/인증 실패는 JSON 폴백
+            continue
+    seen: set[str] = set()
+    out: list[str] = []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return tuple(out)
+
+
+def _recognition_index():
+    """JSON 인식 사전 + 데이터 차종명 별칭 병합(라이브 동기화). 시트 실패 시 JSON만.
+
+    ★기존 JSON 항목 우선(충돌 시 JSON 승) — merge_aliases 가 새 별칭만 추가.
+    """
+    idx = load_car_models()
+    try:
+        idx.merge_aliases(_sheet_car_names())
+    except Exception:  # noqa: BLE001 — 병합 실패해도 JSON 인식은 유지
+        pass
+    return idx
+
+
+_VAULT_PRODUCTS = ["에어컨필터", "와이퍼"]
+
+
+@st.cache_data(ttl=600, show_spinner="발굴함 읽는 중 (구글시트)...")
+def _read_vault_cached() -> list[dict]:
+    """발굴함 전체 행 읽기(10분 캐시). 화면 내 🔄 새로고침으로 무효화."""
+    return read_vault()
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _executed_kw_cached() -> frozenset:
+    """URL 이력 → 집행된 키워드 집합(제품·차종 컬럼 → build_keyword 재구성). 실패 시 빈 집합."""
+    try:
+        logs = fetch_recent_logs(1_000_000)   # 전체(reverse 정렬 무관 — 집합만 필요)
+    except Exception:  # noqa: BLE001
+        return frozenset()
+    return frozenset(executed_keywords_from_logs(logs))
+
+
+def _vault_disp_row(r: dict, new_set: set, formation_set: set, executed: frozenset) -> dict:
+    """발굴함 최신 행(dict, 문자열 셀) → 표시용 dict(타겟 화면 컬럼 문법 재사용)."""
+    kw = str(r.get("keyword", "")).strip()
+    badges = []
+    if kw in new_set:
+        badges.append("🆕 NEW")
+    if kw in formation_set:
+        badges.append("📈 수요형성")
+    if kw in executed:
+        badges.append("✅ 집행됨")
+    doc = str(r.get("doc_count", "")).strip()
+    try:
+        ratio_disp = f"{float(r.get('ratio')):.2f}" if str(r.get("ratio", "")).strip() else "—"
+    except (ValueError, TypeError):
+        ratio_disp = "—"
+    return {
+        "키워드": kw,
+        "기회 점수": str(r.get("opportunity_score", "")).strip() or "—",
+        "검색량": str(r.get("volume", "")).strip(),
+        "문서수": f"{int(doc):,}" if doc.isdigit() else "—",
+        "비율": ratio_disp,
+        "최근3개월": format_recent_int(r.get("recent_3m")),
+        "스캔일": str(r.get("scanned_at", "")).strip(),
+        "비고": " ".join(badges),
+    }
+
+
+_VAULT_COL_ORDER = ["키워드", "기회 점수", "검색량", "문서수", "비율", "최근3개월", "스캔일", "비고"]
+
+
+def _vault_group_df(group_rows: list, new_set: set, formation_set: set, executed: frozenset) -> None:
+    st.dataframe(
+        [_vault_disp_row(r, new_set, formation_set, executed) for r in group_rows],
+        use_container_width=True,
+        hide_index=True,
+        column_order=_VAULT_COL_ORDER,
+    )
+
+
+def _run_vault_scan(product_label: str, todo: list, force: bool) -> None:
+    """todo 차종을 스캔하며 청크마다 발굴함 시트에 즉시 append(중단 내성). 완료 후 캐시 무효화·rerun."""
+    jp_conf = config.JOGYEONPYO_PRODUCTS[product_label]
+    product_kw = jp_conf["product_kw"]
+
+    _ensure_naver_env()   # 시트 접근이 네이버 키를 오염시킬 수 있어 호출 직전 재확정
+    cid = os.environ.get("NAVER_CLIENT_ID", "").strip()
+    csec = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
+    if not (cid and csec):
+        st.error("NAVER_CLIENT_ID/SECRET이 없어 블로그 문서수를 조회할 수 없습니다(.env 확인).")
+        return
+
+    try:
+        ws = open_vault_worksheet()
+    except Exception as e:  # noqa: BLE001
+        st.error(f"발굴함 시트 열기 실패: {type(e).__name__}: {e} — 서비스계정 공유·시트 ID 확인.")
+        return
+    if ws is None:
+        st.error("발굴함 저장 위치가 없습니다 — url_log_sheet_id(또는 URL_LOG_SHEET_ID) 를 설정하세요.")
+        return
+
+    try:
+        adapter = NaverAdapter([product_kw])   # NAVER_AD_* 키 검증
+    except Exception as e:  # noqa: BLE001
+        st.error(f"검색광고 키 오류: {type(e).__name__}: {e}")
+        return
+    _ensure_naver_env()
+    cid = os.environ.get("NAVER_CLIENT_ID", "").strip()
+    csec = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
+
+    total = len(todo)
+    chunk_size = config.VAULT_CHUNK_SIZE
+    prog = st.progress(0.0, f"스캔 준비 중... 0/{total} 차종")
+    state = {"done": 0, "saved": 0}
+
+    def _vol_fn(kws: list) -> dict:
+        adapter._sleep(adapter.rate_limit_seconds)   # 검색량 배치 간 rate limit
+        return keyword_volumes(adapter, kws)
+
+    def _on_chunk(rows: list) -> None:
+        append_vault_rows(ws, rows)                  # ★청크당 즉시 저장(append_rows 1회)
+        state["saved"] += len(rows)
+        state["done"] = min(state["done"] + chunk_size, total)
+        remain = max(total - state["done"], 0)
+        eta_min = remain * 10 / 60                    # 차종당 10초 외삽
+        prog.progress(
+            state["done"] / total if total else 1.0,
+            f"{state['done']}/{total} 차종 · 저장 {state['saved']}행 · 예상 잔여 ~{eta_min:.0f}분",
+        )
+
+    scan_models(
+        todo, product_kw,
+        volumes_fn=_vol_fn,
+        blog_fn=lambda q: fetch_blog_count(q, cid, csec),
+        recent_fn=lambda q: fetch_recent_blog_count(q, cid, csec),
+        on_chunk=_on_chunk,
+        chunk_size=chunk_size,
+    )
+    prog.empty()
+    st.success(f"✅ 스캔 완료 — {state['saved']}행 저장 (대상 {total}개차종).")
+    _read_vault_cached.clear()
+    st.rerun()
+
+
+def render_vault() -> None:
+    _inject_css()
+    st.title("황금 발굴함")
+    st.caption(
+        "데이터 전체 차종 × 제품을 전수 스캔해 구글시트에 영구 저장 — "
+        "잠복(검색량<10) 차종도 기록해 두었다가 재스캔 시 수요 형성을 자동 감지합니다."
+    )
+
+    # ── 발굴함·집행 이력 읽기(캐시) ──────────────────────────────────────────
+    try:
+        all_rows = _read_vault_cached()
+    except Exception as e:  # noqa: BLE001
+        st.error(f"발굴함 읽기 실패: {type(e).__name__}: {e}")
+        all_rows = []
+    executed = _executed_kw_cached()
+
+    # ── 컨트롤 카드 ──────────────────────────────────────────────────────────
+    with st.container(border=True):
+        st.markdown('<div class="fsec">스캔 실행</div>', unsafe_allow_html=True)
+        c1, c2 = st.columns([2, 3])
+        with c1:
+            product = st.radio("제품", _VAULT_PRODUCTS, key="vault_product", horizontal=True)
+        with c2:
+            force = st.checkbox("30일 스킵 무시(강제 재스캔)", value=False, key="vault_force")
+
+        jp_conf = config.JOGYEONPYO_PRODUCTS[product]
+        product_kw = jp_conf["product_kw"]
+        try:
+            models = _read_jogyeonpyo_models(jp_conf["worksheet"], None)
+        except Exception as e:  # noqa: BLE001
+            st.warning(f"데이터 차종 읽기 실패: {type(e).__name__}: {e} — 스캔 불가.")
+            models = []
+
+        todo, skipped = plan_scan(product_kw, models, all_rows, force=force)
+        has_product_rows = any(str(r.get("product", "")).strip() == product_kw for r in all_rows)
+
+        if not models:
+            btn_label = "데이터 차종 없음"
+        elif not todo:
+            btn_label = "스캔할 항목 없음 (모두 최신)"
+        elif has_product_rows:
+            btn_label = f"이어서 스캔 ({len(todo)}개 남음)"
+        else:
+            btn_label = f"스캔 시작 (전체 {len(models)}개)"
+
+        run = st.button(btn_label, key="vault_scan", type="primary",
+                        disabled=(not models or not todo))
+        st.caption(
+            "10개 단위 즉시 저장 — 중단해도 진행분 보존 · 30일 지난 키워드는 자동 갱신 대상"
+            + (f" · 최신 스킵 {skipped}개" if skipped and not force else "")
+        )
+
+    if run:
+        _run_vault_scan(product, todo, force)
+        return   # rerun 예정(도달 안 함)
+
+    # ── 뷰 ───────────────────────────────────────────────────────────────────
+    col_f, col_r = st.columns([4, 1])
+    with col_r:
+        if st.button("🔄 새로고침", key="vault_refresh", help="발굴함·집행 이력 캐시를 비우고 다시 읽습니다."):
+            _read_vault_cached.clear()
+            _executed_kw_cached.clear()
+            st.rerun()
+
+    if not all_rows:
+        st.info("아직 발굴함에 데이터가 없습니다 — 위에서 제품을 고르고 스캔을 실행하세요.")
+        st.caption("원본: 구글시트 '발굴함' 탭 — 영구 저장")
+        return
+
+    latest = vault_latest_rows(all_rows)
+    new_set = new_keywords(all_rows)
+    formation = detect_demand_formation(all_rows)
+    formation_set = {kw for kw, _v in formation}
+
+    # 필터
+    with col_f:
+        fc1, fc2 = st.columns([2, 2])
+        with fc1:
+            view_product = st.radio(
+                "제품 필터", ["전체"] + _VAULT_PRODUCTS, key="vault_view_product", horizontal=True)
+        with fc2:
+            exclude_exec = st.checkbox("집행됨 제외", value=False, key="vault_exclude_exec")
+
+    # 제품 필터는 product_kw 기준 매칭(라벨→접미사)
+    prod_filter = None if view_product == "전체" else config.JOGYEONPYO_PRODUCTS[view_product]["product_kw"]
+    shown = filter_latest_rows(
+        latest, product=prod_filter, exclude_executed=exclude_exec, executed=executed)
+
+    # 요약 칩(필터 반영)
+    summ = summarize_vault(shown, executed=executed)
+    _chips([
+        ("전체", str(summ["total"])),
+        ("🟡 황금", str(summ["gold"])),
+        ("🟢 해볼만", str(summ["ok"])),
+        ("🔴 포화", str(summ["saturated"])),
+        ("💤 잠복", str(summ["dormant"])),
+        ("✅ 집행됨", str(summ["executed"])),
+    ])
+
+    # 수요 형성 알림(전체 기준 — 필터 무관하게 알림)
+    if formation:
+        msg = ", ".join(f"{kw}(검색량 {v})" for kw, v in formation[:8])
+        more = f" 외 {len(formation) - 8}건" if len(formation) > 8 else ""
+        st.success(f"📈 수요 형성 {len(formation)}건: {msg}{more} — 잠복→검색량 형성된 키워드입니다.")
+
+    st.caption("🆕 NEW = 발굴함 첫 등장 · 📈 수요형성 = 직전 잠복→최신 정상 · ✅ 집행됨 = URL 이력에 존재")
+    st.divider()
+
+    gold, ok, saturated, dormant = group_vault_rows(shown)
+
+    st.subheader(f"🟡 1순위 · 황금 — 지금 집행 ({len(gold)}개)")
+    if gold:
+        _vault_group_df(gold, new_set, formation_set, executed)
+    else:
+        st.caption("해당 없음")
+
+    st.subheader(f"🟢 2순위 · 해볼만 — 대기열 ({len(ok)}개)")
+    if ok:
+        _vault_group_df(ok, new_set, formation_set, executed)
+    else:
+        st.caption("해당 없음")
+
+    with st.expander(f"🔴 3순위 · 포화 — 후순위 · 대체로 비추천 ({len(saturated)}개)", expanded=False):
+        if saturated:
+            _vault_group_df(saturated, new_set, formation_set, executed)
+        else:
+            st.caption("해당 없음")
+
+    with st.expander(f"💤 잠복 — 검색량<10 (재스캔 시 수요 형성 자동 감지) ({len(dormant)}개)", expanded=False):
+        st.caption("재스캔 시 수요 형성 자동 감지 — 지금은 검색 수요가 미형성된 차종입니다.")
+        if dormant:
+            _vault_group_df(dormant, new_set, formation_set, executed)
+        else:
+            st.caption("해당 없음")
+
+    st.caption("원본: 구글시트 '발굴함' 탭 — 영구 저장")
 
 
 def render_teamp() -> None:
@@ -2342,7 +2654,7 @@ def render_campaign_analytics() -> None:
 st.sidebar.markdown("**화면 선택**")
 _SCREEN = st.sidebar.radio(
     "화면 선택",
-    ["차종 수요", "계절 제품", "키워드 탐색기", "체험단 타겟", "체험단 양식",
+    ["차종 수요", "계절 제품", "키워드 탐색기", "체험단 타겟", "황금 발굴함", "체험단 양식",
      "체험단 성과 분석"],
     label_visibility="collapsed",
     key="_screen_select",
@@ -2358,6 +2670,8 @@ elif _SCREEN == "계절 제품":
     render_seasonal()
 elif _SCREEN == "체험단 타겟":
     render_teamp()
+elif _SCREEN == "황금 발굴함":
+    render_vault()
 elif _SCREEN == "체험단 양식":
     render_revu_form()
 elif _SCREEN == "체험단 성과 분석":

@@ -94,6 +94,32 @@ class CarModelIndex:
     def model_count(self) -> int:
         return len(self.maker_of)
 
+    def merge_aliases(self, names) -> "CarModelIndex":
+        """데이터(조견표) 차종명을 인식 별칭으로 병합(라이브 동기화). self 반환.
+
+        · canonical = 차종명 원문(그대로).
+        · 이미 매핑된 정규화 별칭은 건드리지 않는다 → ★기존 JSON 항목 우선(충돌 시 JSON 승).
+        · 새 별칭만 추가하고 매칭 인덱스(_aliases_desc)를 1회 재정렬.
+
+        효과: JSON 초안에 없는 신차(데이터에 등록됨)를 차종 수요 화면이 인식하게 된다.
+        시트 읽기 자체는 호출부가 담당(여기는 순수 — 이름 리스트만 받음).
+        """
+        added = False
+        for name in names or []:
+            canon = str(name or "").strip()
+            if not canon:
+                continue
+            norm = normalize_text(canon)
+            if not norm or norm in self.alias_to_canonical:
+                continue  # 빈 별칭 또는 기존(JSON) 우선 → skip
+            self.alias_to_canonical[norm] = canon
+            self.maker_of.setdefault(canon, "")
+            self.note_of.setdefault(canon, "")
+            added = True
+        if added:
+            self._aliases_desc = sorted(self.alias_to_canonical, key=len, reverse=True)
+        return self
+
     def strip_parts(self, keyword: str) -> str:
         """부품어 제거(정규화형 반환). 모델같은 잔여 토큰 식별·bare 검출 보조용."""
         s = normalize_text(keyword)

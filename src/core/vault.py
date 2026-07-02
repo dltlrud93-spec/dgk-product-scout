@@ -158,3 +158,148 @@ def read_vault(*, sheet_id: Optional[str] = None, creds=None) -> list[dict]:
     if ws is None:
         return []
     return parse_vault_values(ws.get_all_values())
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 발굴함 뷰 순수 로직 — 칩 계산·수요형성·NEW·그룹핑·집행됨(전부 최신 행 기준)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _to_int(v, default: Optional[int] = None) -> Optional[int]:
+    """시트 셀(문자열)을 정수로. 빈 값·파싱 불가는 default."""
+    try:
+        return int(float(str(v).strip()))
+    except (ValueError, TypeError):
+        return default
+
+
+def format_recent_int(v) -> str:
+    """시트에 저장된 recent_3m(문자열/공란) → 타겟 화면과 동일한 신호등 라벨.
+
+    공란·파싱 불가(미조회·잠복)는 '—'. 숫자면 teamp 의 format_recent_3m 재사용(문법 일치).
+    """
+    n = _to_int(v, None)
+    if n is None:
+        return "—"
+    from src.core.teamp_mode import format_recent_3m  # 지연 import(순환 방지)
+
+    return format_recent_3m(n)
+
+
+def latest_rows(rows: list[dict]) -> list[dict]:
+    """키워드별 최신 행만 추린 리스트(뷰의 모든 수치는 이 기준으로 일관 계산)."""
+    return [latest for latest, _prev in latest_by_keyword(rows).values()]
+
+
+def keyword_counts(rows: list[dict]) -> dict:
+    """키워드별 발굴함 등장 횟수(NEW 배지 판정용)."""
+    counts: dict[str, int] = {}
+    for r in rows:
+        kw = str(r.get("keyword", "")).strip()
+        if kw:
+            counts[kw] = counts.get(kw, 0) + 1
+    return counts
+
+
+def new_keywords(rows: list[dict]) -> set:
+    """발굴함에 1번만 등장한(첫 스캔) 키워드 집합 — NEW 배지."""
+    return {kw for kw, c in keyword_counts(rows).items() if c == 1}
+
+
+def executed_keywords_from_logs(log_rows: list, product_idx: int = 1, car_idx: int = 2) -> set:
+    """URL 이력 행들에서 집행된 발굴함 키워드 집합을 재구성.
+
+    URL 이력 시트에 '키워드' 컬럼은 없지만 (제품, 차종) 구조화 컬럼이 있어,
+    발굴함 키워드를 만든 것과 동일한 build_keyword(차종, 제품) 로 같은 문자열을
+    결정적으로 재구성한다(억지 URL 파싱 없이 신뢰 가능한 매칭). 헤더 행은 건너뜀.
+    """
+    from src.core.jogyeonpyo import build_keyword  # 지연 import(순환 방지)
+
+    out: set = set()
+    for row in log_rows:
+        if len(row) <= max(product_idx, car_idx):
+            continue
+        product = str(row[product_idx]).strip()
+        car = str(row[car_idx]).strip()
+        if not product or not car or product == "제품":  # 헤더/빈행 skip
+            continue
+        kw = build_keyword(car, product)
+        if kw:
+            out.add(kw)
+    return out
+
+
+def _bucket_of(r: dict) -> str:
+    """최신 행 → 'gold'/'ok'/'saturated'/'dormant' 버킷(status+grade 기준)."""
+    if str(r.get("status", "")).strip() == "잠복":
+        return "dormant"
+    grade = str(r.get("grade", ""))
+    if grade.startswith("🟡"):
+        return "gold"
+    if grade.startswith("🟢"):
+        return "ok"
+    return "saturated"
+
+
+def summarize_vault(rows: list[dict], executed: frozenset = frozenset()) -> dict:
+    """최신 행 리스트 → 요약 칩 카운트.
+
+    반환: {total, gold, ok, saturated, dormant, executed}. rows 는 latest_rows() 결과.
+    """
+    counts = {"total": len(rows), "gold": 0, "ok": 0, "saturated": 0, "dormant": 0, "executed": 0}
+    for r in rows:
+        counts[_bucket_of(r)] += 1
+        if str(r.get("keyword", "")).strip() in executed:
+            counts["executed"] += 1
+    return counts
+
+
+def detect_demand_formation(rows: list[dict]) -> list:
+    """최신=정상 & 직전=잠복 → 수요 형성. (keyword, volume) 리스트(원본 전체 행 입력)."""
+    out: list = []
+    for kw, (latest, prev) in latest_by_keyword(rows).items():
+        if prev is None:
+            continue
+        if (str(latest.get("status", "")).strip() == "정상"
+                and str(prev.get("status", "")).strip() == "잠복"):
+            out.append((kw, str(latest.get("volume", "")).strip()))
+    return out
+
+
+def filter_latest_rows(
+    rows: list[dict],
+    *,
+    product: Optional[str] = None,
+    exclude_executed: bool = False,
+    executed: frozenset = frozenset(),
+) -> list[dict]:
+    """최신 행 리스트를 제품·집행됨 조건으로 거른다(순수).
+
+    product None/'전체' 면 제품 필터 없음. exclude_executed=True 면 executed 키워드 제거.
+    """
+    out: list[dict] = []
+    for r in rows:
+        if product and product != "전체" and str(r.get("product", "")).strip() != product:
+            continue
+        if exclude_executed and str(r.get("keyword", "")).strip() in executed:
+            continue
+        out.append(r)
+    return out
+
+
+def group_vault_rows(rows: list[dict]) -> tuple[list, list, list, list]:
+    """최신 행 → (gold, ok, saturated, dormant). gold/ok/saturated 는 기회 점수 내림차순."""
+    gold: list = []
+    ok: list = []
+    saturated: list = []
+    dormant: list = []
+    for r in rows:
+        {"gold": gold, "ok": ok, "saturated": saturated, "dormant": dormant}[_bucket_of(r)].append(r)
+
+    def _opp(r):
+        v = _to_int(r.get("opportunity_score"), None)
+        return v if v is not None else -1
+
+    gold.sort(key=_opp, reverse=True)
+    ok.sort(key=_opp, reverse=True)
+    saturated.sort(key=_opp, reverse=True)
+    return gold, ok, saturated, dormant
