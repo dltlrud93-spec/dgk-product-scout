@@ -52,6 +52,7 @@ from src.adapters.naver_adapter import NaverAdapter
 from src.core.car_demand import harvest_models, model_member_keywords, rank_models
 from src.core.car_models import load_car_models
 from src.core.teamp_mode import (
+    build_teamp_xlsx,
     fetch_blog_count,
     fetch_blog_titles,
     fetch_recent_blog_count,
@@ -61,6 +62,7 @@ from src.core.teamp_mode import (
     format_recent_ratio,
     harvest_teamp_kw_items,
     normalize_teamp_cache,
+    now_kst_str,
     opportunity_score,
     restore_teamp_widgets,
     sort_rows_for_display,
@@ -1233,6 +1235,10 @@ def render_teamp() -> None:
     with st.expander("블로그 문서수 주의 · 한계", expanded=False):
         st.markdown(_TEAMP_LIMITS_MD)
 
+    # 수집 시각 표시용: 이번 rerun 이 신규 수집인지 캐시 재사용인지 구분.
+    collected_at = None
+    is_new_collection = False
+
     if not valid_request:
         # 입력 없음 — 마지막으로 본 서명의 결과를 맵에서 복원, 없으면 안내
         _last = st.session_state.get(_TEAMP_LAST_SIG_KEY)
@@ -1242,6 +1248,7 @@ def render_teamp() -> None:
             rows = _prev["rows"]
             failed_items = _prev["failed_items"]
             jp_failed = _prev.get("jp_failed", [])
+            collected_at = _prev.get("collected_at")   # 구캐시면 None
         else:
             st.info("사이드바에서 키워드 소스를 고르고, 연관어 모드면 제품 키워드를 입력하세요.")
             return
@@ -1249,6 +1256,7 @@ def render_teamp() -> None:
         rows = _cached["rows"]
         failed_items = _cached["failed_items"]
         jp_failed = _cached.get("jp_failed", [])
+        collected_at = _cached.get("collected_at")   # 구캐시면 None
         st.session_state[_TEAMP_LAST_SIG_KEY] = signature   # 빈 입력 복귀 대비 갱신
     else:
         # 새로 수집 — 소스·키워드·조견표제품 변경 또는 새로고침 시
@@ -1325,6 +1333,9 @@ def render_teamp() -> None:
                 deduped.append((kw, cm, v))
             kw_items = deduped
 
+        collected_at = now_kst_str()
+        is_new_collection = True
+
         if not kw_items:
             msg = "표시할 데이터가 없습니다(검색량>0 키워드 없음)."
             if jp_failed:
@@ -1333,6 +1344,7 @@ def render_teamp() -> None:
             _cache_map[signature] = {
                 "signature": signature, "products": products,
                 "rows": [], "failed_items": [], "jp_failed": jp_failed,
+                "collected_at": collected_at,
             }
             st.session_state[_TEAMP_RESULTS_KEY] = _cache_map
             st.session_state[_TEAMP_LAST_SIG_KEY] = signature
@@ -1377,6 +1389,7 @@ def render_teamp() -> None:
             "rows": rows,
             "failed_items": failed_items,
             "jp_failed": jp_failed,
+            "collected_at": collected_at,
         }
         st.session_state[_TEAMP_RESULTS_KEY] = _cache_map
         st.session_state[_TEAMP_LAST_SIG_KEY] = signature
@@ -1408,6 +1421,14 @@ def render_teamp() -> None:
 
     # ── 순위 그룹(기회 점수) ─────────────────────────────────────────────────
     st.divider()
+
+    # 수집 시각 — 신규 수집/캐시 재사용/구캐시(미기록) 구분 표시.
+    if is_new_collection and collected_at:
+        st.caption(f"🕒 수집: {collected_at} · 신규")
+    elif collected_at:
+        st.caption(f"🕒 수집: {collected_at} · 캐시 (새로고침 버튼으로 갱신)")
+    else:
+        st.caption("🕒 수집 시각 미기록 — 새로고침 시 기록됩니다")
 
     _src_desc = f"소스: {source_label}"
     if use_jp and jp_product_label:
@@ -1476,6 +1497,16 @@ def render_teamp() -> None:
             _group_df(saturated)
         else:
             st.caption("해당 없음")
+
+    # xlsx 내보내기 — 3그룹을 시트별로(rows 있을 때만). 화면 순서(기회 점수순)와 동일.
+    if rows:
+        st.download_button(
+            "📥 xlsx 내보내기 (1·2·3순위 시트)",
+            data=build_teamp_xlsx(gold, ok, saturated),
+            file_name=f"체험단타겟_{date.today().isoformat()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="teamp_xlsx",
+        )
 
     # 조회 실패 항목: 3순위 아래 별도 소표(재시도 필요) — 키워드·검색량·차종만.
     if failed_items:

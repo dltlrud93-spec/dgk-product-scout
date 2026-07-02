@@ -84,6 +84,15 @@ def classify_ratio(
     return "🔴 포화/후순위"
 
 
+def now_kst_str() -> str:
+    """현재 시각을 KST 'YYYY-MM-DD HH:MM' 문자열로 반환(수집 시각 표기용).
+
+    zoneinfo tz 데이터가 없는 환경(윈도우 등)에서도 안전하도록 고정 오프셋(+9h) 사용.
+    """
+    kst = datetime.timezone(datetime.timedelta(hours=9))
+    return datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M")
+
+
 def opportunity_score(volume: int, doc_count: int, k: float = config.TEAMP_EV_K) -> float:
     """기회 점수(EV) = 검색량 × 상위노출 성공확률 근사.
 
@@ -685,7 +694,59 @@ def normalize_teamp_cache(raw):
     """세션의 _teamp_results 를 {signature: 결과dict} 맵으로 정규화한다(순수).
 
     소스별 결과를 서명(signature)별로 따로 보관하기 위한 맵. 구버전(단일 결과 dict,
-    'rows' 키 보유) 또는 None/비-dict 이면 빈 맵을 돌려준다(안전 초기화)."""
+    'rows' 키 보유) 또는 None/비-dict 이면 빈 맵을 돌려준다(안전 초기화).
+
+    ★ collected_at 키가 없는 구버전 엔트리도 그대로 허용한다(엔트리 내부는 손대지 않음).
+      수집 시각은 읽는 쪽에서 entry.get("collected_at")→None 으로 방어한다."""
     if not isinstance(raw, dict) or "rows" in raw:
         return {}
     return raw
+
+
+def build_teamp_xlsx(gold, ok, saturated) -> bytes:
+    """순위 3그룹 → xlsx bytes. 시트 3개(1순위 황금 / 2순위 해볼만 / 3순위 포화).
+
+    · 각 시트 행 순서 = 기회 점수 내림차순(화면 기본 정렬과 동일).
+    · 컬럼: 키워드 | 기회 점수 | 검색량 | 문서수 | 비율 | 최근3개월 | 최근비중 | 차종.
+    · 기회 점수 = round(opportunity_score) 정수 · 검색량/문서수 정수 · 비율 소수2자리 숫자.
+    · 최근3개월/최근비중은 화면 표기 문자열(format_recent_3m/format_recent_ratio) 그대로.
+    openpyxl 은 함수 내부에서 지연 import(선택적 의존성 최상단 import 금지 원칙)."""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    header = ["키워드", "기회 점수", "검색량", "문서수", "비율", "최근3개월", "최근비중", "차종"]
+    head_fill = PatternFill("solid", fgColor="305496")   # 진한 남색(성과분석 xlsx 와 동일 톤)
+    head_font = Font(bold=True, color="FFFFFF")
+    center = Alignment(horizontal="center")
+
+    sheets = [
+        ("1순위 황금", gold),
+        ("2순위 해볼만", ok),
+        ("3순위 포화(비추천)", saturated),
+    ]
+
+    wb = Workbook()
+    for i, (title, group_rows) in enumerate(sheets):
+        ws = wb.active if i == 0 else wb.create_sheet()
+        ws.title = title
+        ws.append(header)
+        for col in range(1, len(header) + 1):
+            c = ws.cell(row=1, column=col)
+            c.fill, c.font, c.alignment = head_fill, head_font, center
+        for r in sort_rows_for_display(group_rows, "기회 점수순 (추천)"):
+            ws.append([
+                r.keyword,
+                int(round(opportunity_score(r.volume, r.doc_count))),
+                int(r.volume),
+                int(r.doc_count),
+                round(r.ratio, 2),
+                format_recent_3m(r.recent_3m_docs),
+                format_recent_ratio(r.recent_3m_docs, r.doc_count),
+                r.car_model,
+            ])
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

@@ -537,6 +537,56 @@ def test_render_teamp_no_gold_top_box():
     assert "황금 TOP" not in blob
 
 
+# ── 스모크: 차종 수요 / 계절 제품 화면 오프라인 렌더(네트워크 0) ─────────────
+# 세션 캐시를 빈 결과로 선주입 → _load_* 네트워크 경로를 타지 않고 빈 상태만 렌더.
+
+def test_render_car_demand_no_exception():
+    """차종 수요 화면: 빈 결과 캐시 주입으로 네트워크 없이 렌더 — 예외 없음."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "차종 수요"
+    at.session_state["_demand_results"] = ([], {}, "", {})   # (rows, trends, note, members_map)
+    at.run()
+    assert not at.exception, f"차종 수요 렌더 예외: {at.exception}"
+
+
+def test_render_seasonal_no_exception():
+    """계절 제품 화면: 빈 결과 캐시 주입으로 네트워크 없이 렌더 — 예외 없음."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "계절 제품"
+    at.session_state["_seasonal_results"] = ([], None, "")   # (rows, winter, note)
+    at.run()
+    assert not at.exception, f"계절 제품 렌더 예외: {at.exception}"
+
+
+def test_render_teamp_xlsx_download_button_present():
+    """순위 그룹 화면에 xlsx 내보내기 다운로드 버튼이 렌더된다(rows 있을 때)."""
+    at = _open_teamp_with_rows()
+    assert not at.exception
+    assert len(at.get("download_button")) >= 1
+
+
+def test_render_teamp_collected_at_caption():
+    """캐시 재사용 렌더면 '수집: {시각} · 캐시' 캡션이 뜬다(collected_at 주입 시)."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "체험단 타겟"
+    sig = ("키워드로 차종 검색", (), "", 0)
+    at.session_state["_teamp_results"] = {
+        sig: {
+            "signature": sig, "products": [],
+            "rows": _teamp_rows_fixture(), "failed_items": [], "jp_failed": [],
+            "collected_at": "2026-07-02 09:30",
+        }
+    }
+    at.session_state["_teamp_last_sig"] = sig
+    at.run()
+    assert not at.exception
+    caps = " ".join(c.value for c in at.caption)
+    assert "2026-07-02 09:30" in caps and "캐시" in caps
+
+
 def test_load_corrupt_values_render_no_exception():
     """손상/허용밖 값이 섞인 JSON 을 불러와도(보정 후) 렌더가 죽지 않는다."""
     bad_json = (

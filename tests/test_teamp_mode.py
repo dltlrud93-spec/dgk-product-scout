@@ -1084,3 +1084,91 @@ def test_sort_does_not_mutate_input():
     before = [r.keyword for r in rows]
     sort_rows_for_display(rows, "기회 점수순 (추천)")
     assert [r.keyword for r in rows] == before
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# xlsx 내보내기 — build_teamp_xlsx
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_build_teamp_xlsx_sheets_headers_and_values():
+    """3그룹 → 시트 3개 + 헤더 행 + 샘플 셀 값(기회 점수 반올림 포함)."""
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from src.core.teamp_mode import build_teamp_xlsx
+
+    gold = [_kw("황금키워드", 2400, 380)]        # opp≈1739 → round 1739, ratio 0.158→0.16
+    ok = [_kw("해볼만키워드", 2000, 3000)]        # ratio 1.5
+    saturated = [_kw("포화키워드", 1000, 5000)]   # ratio 5.0
+
+    xlsx = build_teamp_xlsx(gold, ok, saturated)
+    assert isinstance(xlsx, bytes) and len(xlsx) > 0
+
+    wb = load_workbook(BytesIO(xlsx))
+    assert wb.sheetnames == ["1순위 황금", "2순위 해볼만", "3순위 포화(비추천)"]
+
+    ws = wb["1순위 황금"]
+    header = [c.value for c in ws[1]]
+    assert header == ["키워드", "기회 점수", "검색량", "문서수", "비율", "최근3개월", "최근비중", "차종"]
+
+    # 데이터 행(2행): 키워드·기회 점수(반올림 정수)·검색량·문서수·비율
+    row2 = [c.value for c in ws[2]]
+    assert row2[0] == "황금키워드"
+    assert row2[1] == 1739          # round(opportunity_score(2400,380))
+    assert row2[2] == 2400
+    assert row2[3] == 380
+    assert row2[4] == pytest.approx(0.16)   # round(0.158.., 2)
+
+
+def test_build_teamp_xlsx_sheet_rows_sorted_by_opportunity():
+    """각 시트 행 순서 = 기회 점수 내림차순(화면 기본 정렬 동일)."""
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from src.core.teamp_mode import build_teamp_xlsx
+
+    # 모두 황금(ratio<1), opp: A(2400,380)=1739 > C(1200,36)=1158 > B(5000,4500)=909
+    gold = [_kw("B", 5000, 4500), _kw("C", 1200, 36), _kw("A", 2400, 380)]
+    wb = load_workbook(BytesIO(build_teamp_xlsx(gold, [], [])))
+    ws = wb["1순위 황금"]
+    keywords = [ws.cell(row=r, column=1).value for r in range(2, ws.max_row + 1)]
+    assert keywords == ["A", "C", "B"]
+
+
+def test_build_teamp_xlsx_recent_columns_are_display_strings():
+    """최근3개월/최근비중 셀은 화면 표기 문자열(format_*) 그대로 저장된다."""
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from src.core.teamp_mode import build_teamp_xlsx, format_recent_3m, format_recent_ratio
+
+    r = _kw("황금키워드", 5000, 1000)   # ratio 0.2 → 황금
+    r.recent_3m_docs = 7
+    wb = load_workbook(BytesIO(build_teamp_xlsx([r], [], [])))
+    ws = wb["1순위 황금"]
+    row2 = [c.value for c in ws[2]]
+    assert row2[5] == format_recent_3m(7)                 # "🟢 7 노려볼만"
+    assert row2[6] == format_recent_ratio(7, 1000)        # "0.7%"
+
+
+def test_build_teamp_xlsx_empty_groups_headers_only():
+    """빈 그룹도 시트·헤더는 존재하고 데이터 행은 없다."""
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from src.core.teamp_mode import build_teamp_xlsx
+
+    wb = load_workbook(BytesIO(build_teamp_xlsx([], [], [])))
+    for name in ["1순위 황금", "2순위 해볼만", "3순위 포화(비추천)"]:
+        ws = wb[name]
+        assert ws.max_row == 1   # 헤더만
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 수집 시각(collected_at) — normalize_teamp_cache 구버전 방어
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_normalize_teamp_cache_allows_entries_without_collected_at():
+    """collected_at 키가 없는 구버전 엔트리도 맵에 그대로 보존 + .get()→None 방어."""
+    from src.core.teamp_mode import normalize_teamp_cache
+    sig = ("키워드로 차종 검색", ("에어컨필터",), "", 0)
+    old_entry = {"signature": sig, "products": [], "rows": [], "failed_items": [], "jp_failed": []}
+    cm = normalize_teamp_cache({sig: old_entry})
+    assert cm[sig] is old_entry                       # 엔트리 내부 손대지 않음
+    assert cm[sig].get("collected_at") is None        # 읽는 쪽 방어값

@@ -1,4 +1,5 @@
-streamlit>=1.30
+# 고정 이유: 카드·입력칸 CSS가 Streamlit 내부 선택자 의존 — Cloud 무단 업그레이드로 색감 원복 방지. 갱신은 로컬 검증 후 수동.
+streamlit==1.58.0
 pytest>=8.0
 requests>=2.31
 python-dotenv>=1.0
