@@ -40,7 +40,10 @@ from src.core.teamp_mode import (
     format_recent_3m,
     format_recent_ratio,
     harvest_teamp_kw_items,
+    opportunity_score,
     restore_teamp_widgets,
+    sort_rows_for_display,
+    split_priority_groups,
     top_gold_kw_rows,
     top_gold_kw_rows_by_ratio,
     top_gold_rows,
@@ -951,3 +954,133 @@ def test_cache_map_keeps_results_per_signature():
     assert cm[sig_a]["rows"] == ["A"] and cm[sig_b]["rows"] == ["B"]   # 둘 다 보존
     cm.pop(sig_a, None)                       # 새로고침(A만)
     assert sig_a not in cm and cm[sig_b]["rows"] == ["B"]   # B 유지
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 순위 그룹(기회 점수) — opportunity_score / split_priority_groups / sort_rows_for_display
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _kw(keyword: str, volume: int, doc_count: int) -> TeampKwRow:
+    """기회 점수/정렬 테스트용 TeampKwRow(비율·등급은 실제 계산으로 채움)."""
+    ratio = doc_count / volume
+    return TeampKwRow(
+        keyword=keyword, car_model="", volume=volume,
+        doc_count=doc_count, ratio=ratio, grade=classify_ratio(ratio),
+    )
+
+
+# ─────────────────────────── opportunity_score ─────────────────────────────
+def test_opportunity_score_exact_values():
+    """기회 점수 정확값 (k=1000 기본)."""
+    assert opportunity_score(2400, 380) == pytest.approx(1739.13, abs=0.01)
+    assert opportunity_score(1200, 36) == pytest.approx(1158.30, abs=0.01)
+    assert opportunity_score(5000, 4500) == pytest.approx(909.09, abs=0.01)
+
+
+def test_opportunity_score_monotonic_in_volume():
+    """문서수 고정 시 검색량↑ → 점수↑."""
+    base = opportunity_score(1000, 500)
+    assert opportunity_score(2000, 500) > base
+    assert opportunity_score(5000, 500) > opportunity_score(2000, 500)
+
+
+def test_opportunity_score_monotonic_in_doc_count():
+    """검색량 고정 시 문서수↑ → 점수↓."""
+    base = opportunity_score(3000, 100)
+    assert opportunity_score(3000, 1000) < base
+    assert opportunity_score(3000, 10000) < opportunity_score(3000, 1000)
+
+
+@pytest.mark.parametrize("k", [300, 1000, 3000])
+def test_opportunity_score_k_robustness(k):
+    """k ∈ {300,1000,3000} 모두에서 (40000,210000) 점수 < (2400,380) 점수.
+
+    (검색량 크지만 문서 과포화한 키워드가, 작지만 여유 있는 키워드에 밀린다.)
+    """
+    assert opportunity_score(40000, 210000, k=k) < opportunity_score(2400, 380, k=k)
+
+
+# ─────────────────────────── split_priority_groups ─────────────────────────
+def test_split_priority_groups_separates_three_grades():
+    """세 등급 혼합 → (gold, ok, saturated) 정확 분리 + 각 그룹 내 원소 순서 보존."""
+    rows = [
+        _kw("황금1", 5000, 500),    # ratio 0.1 → 🟡
+        _kw("포화1", 1000, 5000),   # ratio 5.0 → 🔴
+        _kw("해볼만1", 2000, 3000), # ratio 1.5 → 🟢
+        _kw("황금2", 3000, 600),    # ratio 0.2 → 🟡
+        _kw("해볼만2", 1000, 2000), # ratio 2.0 → 🟢
+        _kw("포화2", 1000, 4000),   # ratio 4.0 → 🔴
+    ]
+    gold, ok, saturated = split_priority_groups(rows)
+
+    assert [r.keyword for r in gold] == ["황금1", "황금2"]
+    assert [r.keyword for r in ok] == ["해볼만1", "해볼만2"]
+    assert [r.keyword for r in saturated] == ["포화1", "포화2"]
+    assert all(r.grade.startswith("🟡") for r in gold)
+    assert all(r.grade.startswith("🟢") for r in ok)
+    assert all(r.grade.startswith("🔴") for r in saturated)
+
+
+def test_split_priority_groups_empty_groups():
+    """일부 등급이 비어도 빈 리스트로 반환(누락 없음)."""
+    rows = [_kw("황금만", 5000, 100)]
+    gold, ok, saturated = split_priority_groups(rows)
+    assert len(gold) == 1 and ok == [] and saturated == []
+
+
+# ─────────────────────────── sort_rows_for_display ─────────────────────────
+def _sort_fixture() -> list[TeampKwRow]:
+    # A: opp≈1739, ratio≈0.158 / B: opp≈909, ratio=0.9 / C: opp≈1158, ratio=0.03
+    return [
+        _kw("A", 2400, 380),
+        _kw("B", 5000, 4500),
+        _kw("C", 1200, 36),
+    ]
+
+
+def test_sort_by_opportunity_score_descending():
+    """'기회 점수순 (추천)': opp 내림차순 — (5000,4500)=B 가 (2400,380)=A 아래로 간다."""
+    rows = _sort_fixture()
+    out = sort_rows_for_display(rows, "기회 점수순 (추천)")
+    assert [r.keyword for r in out] == ["A", "C", "B"]
+
+
+def test_sort_by_opportunity_score_tiebreak():
+    """opp 동률 시 volume 내림차순 → keyword 오름차순."""
+    # 같은 opp(=volume, doc=0): vol 동률이면 keyword 오름차순
+    rows = [_kw("나", 1000, 0), _kw("가", 1000, 0), _kw("다", 2000, 0)]
+    out = sort_rows_for_display(rows, "기회 점수순 (추천)")
+    # 다(vol 2000, opp 2000) 먼저 → 가·나(vol 1000 동률) → keyword 오름차순 가,나
+    assert [r.keyword for r in out] == ["다", "가", "나"]
+
+
+def test_sort_by_ratio_ascending():
+    """'비율 오름차순 (황금 위)': ratio 오름차순."""
+    rows = _sort_fixture()
+    out = sort_rows_for_display(rows, "비율 오름차순 (황금 위)")
+    assert [r.keyword for r in out] == ["C", "A", "B"]
+
+
+def test_sort_by_volume_descending():
+    """'검색량 내림차순': volume 내림차순."""
+    rows = _sort_fixture()
+    out = sort_rows_for_display(rows, "검색량 내림차순")
+    assert [r.keyword for r in out] == ["B", "A", "C"]
+
+
+def test_sort_by_hidden_opportunity_recent_none_is_inf():
+    """'검색량↑ + 최근글↓': volume 내림차순, 동률 시 recent_3m_docs 오름차순(None=inf)."""
+    r1 = _kw("적은최근", 3000, 100); r1.recent_3m_docs = 2
+    r2 = _kw("미조회", 3000, 100); r2.recent_3m_docs = None   # inf 취급 → 뒤로
+    r3 = _kw("작은검색", 1000, 100); r3.recent_3m_docs = 0
+    out = sort_rows_for_display([r2, r1, r3], "검색량↑ + 최근글↓ (숨은 기회)")
+    # vol 3000 두 개 먼저(최근글 적은 순: 2 < None) → vol 1000
+    assert [r.keyword for r in out] == ["적은최근", "미조회", "작은검색"]
+
+
+def test_sort_does_not_mutate_input():
+    """정렬은 원본 리스트를 변형하지 않는다(새 리스트 반환)."""
+    rows = _sort_fixture()
+    before = [r.keyword for r in rows]
+    sort_rows_for_display(rows, "기회 점수순 (추천)")
+    assert [r.keyword for r in rows] == before

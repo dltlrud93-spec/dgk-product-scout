@@ -473,6 +473,70 @@ def test_save_then_load_roundtrip_via_real_render():
         assert _ss_get(at2, k) == v, f"복원 불일치: {k}"
 
 
+# ── 체험단 타겟 순위 그룹 화면 렌더 ──────────────────────────────────────────
+
+def _teamp_rows_fixture():
+    """세 등급이 모두 있는 TeampKwRow 리스트(순위 그룹 3개가 다 뜨도록)."""
+    from src.core.teamp_mode import TeampKwRow, classify_ratio
+
+    def _row(kw, cm, vol, docs):
+        ratio = docs / vol
+        return TeampKwRow(keyword=kw, car_model=cm, volume=vol,
+                          doc_count=docs, ratio=ratio, grade=classify_ratio(ratio))
+
+    return [
+        _row("셀토스에어컨필터", "셀토스KX3", 5000, 500),    # 0.10 → 🟡 황금
+        _row("아반떼에어컨필터", "아반떼", 2000, 3000),       # 1.50 → 🟢 해볼만
+        _row("모닝에어컨필터", "모닝", 3260, 18850),          # 5.78 → 🔴 포화
+    ]
+
+
+def _open_teamp_with_rows():
+    """체험단 타겟 화면을 캐시된 결과 주입으로 렌더(네트워크 없이 순위 그룹 표시)."""
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "체험단 타겟"
+    sig = ("키워드로 차종 검색", (), "", 0)   # 빈 입력 복귀 경로가 이 서명 결과를 읽음
+    at.session_state["_teamp_results"] = {
+        sig: {
+            "signature": sig, "products": [],
+            "rows": _teamp_rows_fixture(), "failed_items": [], "jp_failed": [],
+        }
+    }
+    at.session_state["_teamp_last_sig"] = sig
+    at.run()
+    return at
+
+
+def test_render_teamp_priority_groups_present():
+    """순위 그룹 3개 헤더(1순위 황금/2순위 해볼만/3순위 포화)가 렌더되고 예외 없다."""
+    at = _open_teamp_with_rows()
+    assert not at.exception, f"체험단 타겟 렌더 예외: {at.exception}"
+    blob = " ".join(
+        [s.value for s in at.subheader]
+        + [e.label for e in at.expander]
+        + [m.value for m in at.markdown]
+        + [c.value for c in at.caption]
+    )
+    assert "1순위 · 황금" in blob
+    assert "2순위 · 해볼만" in blob
+    assert "3순위 · 포화" in blob
+
+
+def test_render_teamp_no_gold_top_box():
+    """황금 TOP 박스는 제거됐다 — 화면 어디에도 '황금 TOP' 문구가 없다."""
+    at = _open_teamp_with_rows()
+    assert not at.exception
+    blob = " ".join(
+        [s.value for s in at.subheader]
+        + [e.label for e in at.expander]
+        + [m.value for m in at.markdown]
+        + [c.value for c in at.caption]
+        + [t.value for t in at.title]
+    )
+    assert "황금 TOP" not in blob
+
+
 def test_load_corrupt_values_render_no_exception():
     """손상/허용밖 값이 섞인 JSON 을 불러와도(보정 후) 렌더가 죽지 않는다."""
     bad_json = (

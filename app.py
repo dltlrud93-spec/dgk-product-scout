@@ -61,9 +61,10 @@ from src.core.teamp_mode import (
     format_recent_ratio,
     harvest_teamp_kw_items,
     normalize_teamp_cache,
+    opportunity_score,
     restore_teamp_widgets,
-    top_gold_kw_rows,
-    top_gold_kw_rows_by_ratio,
+    sort_rows_for_display,
+    split_priority_groups,
 )
 from src.core.jogyeonpyo import (
     harvest_jogyeonpyo_kw_items,
@@ -453,8 +454,14 @@ _SRC_DATA = "데이터로 차종 검색"    # 조견표 차종 × 제품 직접 
 _SRC_HYBRID = "하이브리드 모드"     # 둘 다(연관어 + 조견표 합쳐 중복 제거)
 
 # 정렬 라디오 옵션(위젯 정의·복원에서 단일 출처로 공유).
-_TEAMP_SORT_OPTS = ["비율 오름차순 (황금 위)", "검색량 내림차순", "검색량↑ + 최근글↓ (숨은 기회)"]
-_TEAMP_TOP10_OPTS = ["비율 낮은 순", "검색량 높은 순"]
+# ★index 0 = 신규 세션 기본값(기회 점수순). 기존 3개 라벨 문자열은 _teamp_last_sort 복원
+#   호환을 위해 한 글자도 바꾸지 않는다.
+_TEAMP_SORT_OPTS = [
+    "기회 점수순 (추천)",
+    "비율 오름차순 (황금 위)",
+    "검색량 내림차순",
+    "검색량↑ + 최근글↓ (숨은 기회)",
+]
 
 
 def _trend_display(t, low_conf: bool) -> str:
@@ -989,6 +996,12 @@ _TEAMP_COLUMN_CONFIG = {
         width="large",
         help="검색광고 키워드도구 연관 키워드 원문. 이 문자열 그대로 검색량과 문서수를 잽니다.",
     ),
+    "기회 점수": st.column_config.NumberColumn(
+        "기회 점수",
+        width="small",
+        format="localized",
+        help="검색량 × 상위노출 성공확률 — 클수록 우선. 그룹 내 순위 비교용(실제 유입 예측치 아님).",
+    ),
     "검색량": st.column_config.NumberColumn(
         "검색량",
         width="small",
@@ -1102,13 +1115,13 @@ def render_teamp() -> None:
         src_opts=[_SRC_ASSOC, _SRC_DATA, _SRC_HYBRID],
         jp_opts=config.JOGYEONPYO_PRODUCTS,
         sort_opts=_TEAMP_SORT_OPTS,
-        top10_opts=_TEAMP_TOP10_OPTS,
     )
 
     st.title("체험단 타겟 선정")
     st.caption(
         f"키워드 소스({_SRC_ASSOC} / {_SRC_DATA} / {_SRC_HYBRID}) → 키워드별 검색량 × 블로그 문서수 → 비율 분류. "
-        "비율 낮은 키워드가 체험단 공략 후보입니다."
+        "비율 낮은 키워드가 체험단 공략 후보입니다. "
+        "결과는 1·2·3순위 그룹으로 표시 — 집행은 1순위부터, 3순위는 비추천."
     )
 
     # 사이드바: 키워드 소스 선택
@@ -1168,17 +1181,12 @@ def render_teamp() -> None:
         _TEAMP_SORT_OPTS,
         key="teamp_sort",
         help=(
-            "기본: 비율 오름차순(황금 후보가 위). "
+            "기회 점수 = 검색량 × 상위노출 성공확률(문서수 반영). 이길 수 있으면서 파이 큰 순. "
+            "비율 오름차순: 황금 후보가 위. "
             "검색량순: 규모 큰 키워드 먼저. "
             "검색량↑ + 최근글↓: 검색량이 크면서 최근 3개월 글이 적은 키워드 — "
             "총 문서수는 많아도 최신 경쟁이 약한 숨은 기회 탐색."
         ),
-    )
-    top10_sort_label = st.sidebar.radio(
-        "황금 TOP10",
-        _TEAMP_TOP10_OPTS,
-        key="teamp_top10_sort",
-        help="기본: 비율 낮은 순(공략 여지 큰 순). 검색량 높은 순으로 바꾸면 규모 큰 황금 후보를 먼저 볼 수 있습니다.",
     )
 
     products = [s.strip() for s in product_text.replace(",", "\n").splitlines() if s.strip()]
@@ -1190,7 +1198,6 @@ def render_teamp() -> None:
     if jp_product_label:
         st.session_state["_teamp_last_jp_product"] = jp_product_label
     st.session_state["_teamp_last_sort"] = sort_label
-    st.session_state["_teamp_last_top10_sort"] = top10_sort_label
 
     # 요청 식별 서명 — 소스/제품키워드/조견표제품/상한이 같으면 세션 캐시 재사용.
     # ★서명별 결과 맵(_cache_map)에 따로 보관 → 소스 바꿔도 이전 결과 안 사라짐(되돌아오면 즉시).
@@ -1380,12 +1387,7 @@ def render_teamp() -> None:
         st.info("표시할 데이터가 없습니다.")
         return
 
-    # ── 요약 칩 + 황금 TOP10 카드 ────────────────────────────────────────────
-    if top10_sort_label == "비율 낮은 순":
-        top10 = top_gold_kw_rows_by_ratio(rows, n=10)
-    else:
-        top10 = top_gold_kw_rows(rows, n=10)
-
+    # ── 요약 칩 ──────────────────────────────────────────────────────────────
     grade_counts = {"🟡 황금": 0, "🟢 해볼만": 0, "🔴 포화/후순위": 0}
     for r in rows:
         grade_counts[r.grade] = grade_counts.get(r.grade, 0) + 1
@@ -1404,34 +1406,8 @@ def render_teamp() -> None:
         chip_items.append(("⚠️ 데이터 검색량 실패", str(len(jp_failed))))
     _chips(chip_items)
 
-    if top10:
-        # 비율 낮은 순 → 동률은 검색량 높은 순 (표시 정렬만, 10개 선택은 top_gold_kw_rows* 결과 그대로)
-        display_top10 = sorted(top10, key=lambda r: (r.ratio, -r.volume))
-        _highlight_table(
-            f"🟡 황금 TOP {len(display_top10)} — {top10_sort_label}",
-            ["순위", "키워드", "검색량", "비율"],
-            [[str(i + 1), r.keyword, f"{r.volume:,}", f"{r.ratio:.2f}"]
-             for i, r in enumerate(display_top10)],
-            align=["center", "left", "right", "right"],
-        )
-    else:
-        st.info("황금 분류 후보가 없습니다(전체가 해볼만 이상).")
-
-    # ── 본표 ────────────────────────────────────────────────────────────────
+    # ── 순위 그룹(기회 점수) ─────────────────────────────────────────────────
     st.divider()
-    st.subheader("본표")
-    if sort_label == "검색량 내림차순":
-        shown = sorted(rows, key=lambda r: r.volume, reverse=True)
-    elif sort_label == "검색량↑ + 최근글↓ (숨은 기회)":
-        shown = sorted(
-            rows,
-            key=lambda r: (
-                -r.volume,
-                r.recent_3m_docs if r.recent_3m_docs is not None else float("inf"),
-            ),
-        )
-    else:
-        shown = sorted(rows, key=lambda r: r.ratio)
 
     _src_desc = f"소스: {source_label}"
     if use_jp and jp_product_label:
@@ -1439,43 +1415,78 @@ def render_teamp() -> None:
     if use_assoc and products:
         _src_desc += f" · 제품 키워드: {', '.join(products)}"
     st.caption(
-        f"{sort_label} · {len(shown)}행"
+        "기회 점수 = 검색량 × 상위노출 성공확률(문서수 반영, k=1000) · 그룹 내 순위 비교용 — "
+        "실제 유입 예측치 아님."
+    )
+    st.caption(
+        f"{sort_label} · {len(rows)}행"
         + (f" + 블로그실패 {len(failed_items)}건" if failed_items else "")
         + (f" + 데이터검색량실패 {len(jp_failed)}건" if jp_failed else "")
         + f" · {_src_desc} (열 머리글 클릭 시 정렬)"
     )
 
-    # 컬럼 순서: 키워드·검색량·문서수·비율·최근3개월·최근비중·분류 (핵심 7개) | 차종(참고, 우측)
-    table_rows = [
-        {
-            "키워드": r.keyword,
-            "검색량": r.volume,
-            "문서수": f"{r.doc_count:,}",
-            "비율": f"{r.ratio:.2f}",
-            "최근3개월": format_recent_3m(r.recent_3m_docs),
-            "최근비중": format_recent_ratio(r.recent_3m_docs, r.doc_count),
-            "분류": r.grade,
-            "차종": r.car_model,
-        }
-        for r in shown
-    ]
-    # 조회 실패 항목: 맨 아래, 문서수·비율·최근3개월·최근비중 '–'
-    for kw, cm, v in failed_items:
-        table_rows.append({
-            "키워드": kw,
-            "검색량": v,
-            "문서수": "–", "비율": "–", "최근3개월": "–", "최근비중": "–",
-            "분류": "⚠️ 조회실패",
-            "차종": cm,
-        })
+    # 컬럼 순서: 키워드·기회 점수·검색량·문서수·비율·최근3개월·최근비중 | 차종(참고, 우측)
+    _COL_ORDER = ["키워드", "기회 점수", "검색량", "문서수", "비율", "최근3개월", "최근비중", "차종"]
 
-    st.dataframe(
-        table_rows,
-        use_container_width=True,
-        hide_index=True,
-        column_config=_TEAMP_COLUMN_CONFIG,
-        column_order=["키워드", "검색량", "문서수", "비율", "최근3개월", "최근비중", "분류", "차종"],
-    )
+    def _group_table(group_rows: list) -> list[dict]:
+        shown = sort_rows_for_display(group_rows, sort_label)
+        return [
+            {
+                "키워드": r.keyword,
+                "기회 점수": round(opportunity_score(r.volume, r.doc_count)),
+                "검색량": r.volume,
+                "문서수": f"{r.doc_count:,}",
+                "비율": f"{r.ratio:.2f}",
+                "최근3개월": format_recent_3m(r.recent_3m_docs),
+                "최근비중": format_recent_ratio(r.recent_3m_docs, r.doc_count),
+                "차종": r.car_model,
+            }
+            for r in shown
+        ]
+
+    def _group_df(group_rows: list) -> None:
+        st.dataframe(
+            _group_table(group_rows),
+            use_container_width=True,
+            hide_index=True,
+            column_config=_TEAMP_COLUMN_CONFIG,
+            column_order=_COL_ORDER,
+        )
+
+    gold, ok, saturated = split_priority_groups(rows)
+
+    # 1순위 · 황금 — 지금 집행
+    st.subheader(f"🟡 1순위 · 황금 — 지금 집행 ({len(gold)}개)")
+    if gold:
+        _group_df(gold)
+    else:
+        st.caption("해당 없음")
+
+    # 2순위 · 해볼만 — 대기열
+    st.subheader(f"🟢 2순위 · 해볼만 — 대기열, 황금 소진 후 여기서부터 ({len(ok)}개)")
+    if ok:
+        _group_df(ok)
+    else:
+        st.caption("해당 없음")
+
+    # 3순위 · 포화 — 후순위(접힘)
+    with st.expander(f"🔴 3순위 · 포화 — 후순위 · 대체로 비추천 ({len(saturated)}개)", expanded=False):
+        st.caption("상위 노출 가능성 낮음 — 체험단 예산 투입 비추천")
+        if saturated:
+            _group_df(saturated)
+        else:
+            st.caption("해당 없음")
+
+    # 조회 실패 항목: 3순위 아래 별도 소표(재시도 필요) — 키워드·검색량·차종만.
+    if failed_items:
+        st.markdown("**⚠️ 조회 실패 (재시도 필요)**")
+        st.dataframe(
+            [{"키워드": kw, "검색량": v, "차종": cm} for kw, cm, v in failed_items],
+            use_container_width=True,
+            hide_index=True,
+            column_config=_TEAMP_COLUMN_CONFIG,
+            column_order=["키워드", "검색량", "차종"],
+        )
 
     if failed_items:
         st.warning(

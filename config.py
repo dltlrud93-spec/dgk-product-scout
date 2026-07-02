@@ -265,6 +265,9 @@ TREND_LOWCONF_VOLUME = 2000
 TEAMP_RATIO_GOLD = 1.0   # 비율 < 1.0 → 🟡 황금 (글이 수요보다 적음)
 TEAMP_RATIO_OK   = 3.0   # 1.0 ≤ 비율 ≤ 3.0 → 🟢 해볼만, 초과 → 🔴 포화/후순위
 
+# 기회 점수(EV)의 상위노출 진입 난이도 상수. 검산상 300~3000 범위에서 순위 둔감 — 튜닝 금지.
+TEAMP_EV_K = 1000
+
 # 네이버 블로그 검색 API (openapi.naver.com). 키: NAVER_CLIENT_ID/NAVER_CLIENT_SECRET (데이터랩 공통).
 # total 값만 필요 → display=1 로 문서 1건만 받아 처리량 최소화.
 # 처리한도 25,000/일(차종 수십 × 제품 수개는 충분히 여유). 캐싱(ttl=3600)으로 재호출 방지.

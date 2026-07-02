@@ -84,6 +84,61 @@ def classify_ratio(
     return "🔴 포화/후순위"
 
 
+def opportunity_score(volume: int, doc_count: int, k: float = config.TEAMP_EV_K) -> float:
+    """기회 점수(EV) = 검색량 × 상위노출 성공확률 근사.
+
+    성공확률 근사 = k / (k + doc_count) — 문서수가 많을수록(경쟁 깊을수록) 감소.
+    ★ 순위 비교 전용 지표이지 유입 예측치가 아니다. k 는 상위노출 진입 난이도 상수.
+    """
+    return volume * k / (k + doc_count)
+
+
+def split_priority_groups(rows) -> tuple[list, list, list]:
+    """등급 문자열 앞글자로 3그룹 분리 — (gold, ok, saturated). 원소 순서 보존.
+
+    · grade 가 "🟡"로 시작 → gold
+    · "🟢"로 시작 → ok
+    · 그 외("🔴" 등) → saturated
+    """
+    gold: list = []
+    ok: list = []
+    saturated: list = []
+    for r in rows:
+        if r.grade.startswith("🟡"):
+            gold.append(r)
+        elif r.grade.startswith("🟢"):
+            ok.append(r)
+        else:
+            saturated.append(r)
+    return gold, ok, saturated
+
+
+def sort_rows_for_display(rows, sort_label) -> list:
+    """정렬 라벨에 따라 rows 를 정렬한 새 리스트 반환(원본 불변).
+
+    · "기회 점수순 (추천)": opportunity_score 내림차순 → 동률 시 volume 내림차순 → keyword 오름차순
+    · "검색량 내림차순": volume 내림차순
+    · "검색량↑ + 최근글↓ (숨은 기회)": volume 내림차순, 동률 시 recent_3m_docs 오름차순(None=inf)
+    · 그 외("비율 오름차순 (황금 위)" 등): ratio 오름차순
+    """
+    if sort_label == "기회 점수순 (추천)":
+        return sorted(
+            rows,
+            key=lambda r: (-opportunity_score(r.volume, r.doc_count), -r.volume, r.keyword),
+        )
+    if sort_label == "검색량 내림차순":
+        return sorted(rows, key=lambda r: r.volume, reverse=True)
+    if sort_label == "검색량↑ + 최근글↓ (숨은 기회)":
+        return sorted(
+            rows,
+            key=lambda r: (
+                -r.volume,
+                r.recent_3m_docs if r.recent_3m_docs is not None else float("inf"),
+            ),
+        )
+    return sorted(rows, key=lambda r: r.ratio)
+
+
 def _cutoff_date(months: int) -> datetime.date:
     """오늘 기준 months 개월 전 날짜. 말일 clamp 처리(예: 3/31 → 3개월 전 = 12/31)."""
     today = datetime.date.today()
