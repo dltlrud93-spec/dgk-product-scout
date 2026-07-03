@@ -70,7 +70,6 @@ from src.core.teamp_mode import (
 )
 from src.core.jogyeonpyo import (
     harvest_jogyeonpyo_kw_items,
-    keyword_volumes,
     read_car_models,
 )
 from src.core.vault import (
@@ -86,7 +85,7 @@ from src.core.vault import (
     read_vault,
     summarize_vault,
 )
-from src.core.scanner import plan_scan, scan_models
+from src.core.scanner import make_batch_query, no_keyword_models, plan_scan, scan_models
 from src.core.search_volume import (
     FIELD_COMP_IDX,
     FIELD_MONTHLY_MOBILE,
@@ -1216,8 +1215,11 @@ def _vault_group_df(group_rows: list, new_set: set, formation_set: set, executed
     )
 
 
-def _run_vault_scan(product_label: str, todo: list, force: bool) -> None:
-    """todo 차종을 스캔하며 청크마다 발굴함 시트에 즉시 append(중단 내성). 완료 후 캐시 무효화·rerun."""
+def _run_vault_scan(product_label: str, todo: list, force: bool, vault_rows: list) -> None:
+    """todo 차종을 스캔하며 청크마다 발굴함 시트에 즉시 append(중단 내성). 완료 후 캐시 무효화·rerun.
+
+    vault_rows: 발굴함 현재 전체 행 — 연관어 부수확의 30일 내 미기록 판정(④)에 사용.
+    """
     jp_conf = config.JOGYEONPYO_PRODUCTS[product_label]
     product_kw = jp_conf["product_kw"]
 
@@ -1251,9 +1253,13 @@ def _run_vault_scan(product_label: str, todo: list, force: bool) -> None:
     prog = st.progress(0.0, f"스캔 준비 중... 0/{total} 차종")
     state = {"done": 0, "saved": 0}
 
-    def _vol_fn(kws: list) -> dict:
-        adapter._sleep(adapter.rate_limit_seconds)   # 검색량 배치 간 rate limit
-        return keyword_volumes(adapter, kws)
+    # 검색량·연관어를 ★배치당 API 1회로 공유(연관어 부수확은 추가 호출 없음).
+    volumes_fn, variants_fn = make_batch_query(
+        lambda kws: adapter._request_keywordstool(list(kws)),
+        sleep_fn=adapter._sleep,
+        rate_limit=adapter.rate_limit_seconds,
+    )
+    index = _recognition_index()   # 라이브 병합 인식 사전(변형 채택 ② 조건)
 
     def _on_chunk(rows: list) -> None:
         append_vault_rows(ws, rows)                  # ★청크당 즉시 저장(append_rows 1회)
@@ -1266,17 +1272,26 @@ def _run_vault_scan(product_label: str, todo: list, force: bool) -> None:
             f"{state['done']}/{total} 차종 · 저장 {state['saved']}행 · 예상 잔여 ~{eta_min:.0f}분",
         )
 
-    scan_models(
+    failures = scan_models(
         todo, product_kw,
-        volumes_fn=_vol_fn,
+        volumes_fn=volumes_fn,
         blog_fn=lambda q: fetch_blog_count(q, cid, csec),
         recent_fn=lambda q: fetch_recent_blog_count(q, cid, csec),
         on_chunk=_on_chunk,
+        variants_fn=variants_fn,
+        index=index,
+        vault_rows=vault_rows,
         chunk_size=chunk_size,
     )
     prog.empty()
-    st.success(f"✅ 스캔 완료 — {state['saved']}행 저장 (대상 {total}개차종).")
     _read_vault_cached.clear()
+
+    # 실패는 세션 한정 표시(시트 미기록 — 다음 스캔 자동 재시도). 완료 메시지에 요약.
+    if failures:
+        st.session_state["_vault_last_failures"] = failures
+    else:
+        st.session_state.pop("_vault_last_failures", None)
+    st.session_state["_vault_last_result"] = {"saved": state["saved"], "total": total}
     st.rerun()
 
 
@@ -1314,6 +1329,7 @@ def render_vault() -> None:
             models = []
 
         todo, skipped = plan_scan(product_kw, models, all_rows, force=force)
+        no_kw = len(no_keyword_models(product_kw, models))
         has_product_rows = any(str(r.get("product", "")).strip() == product_kw for r in all_rows)
 
         if not models:
@@ -1328,12 +1344,32 @@ def render_vault() -> None:
         run = st.button(btn_label, key="vault_scan", type="primary",
                         disabled=(not models or not todo))
         st.caption(
-            "10개 단위 즉시 저장 — 중단해도 진행분 보존 · 30일 지난 키워드는 자동 갱신 대상"
+            "10개 단위 즉시 저장 — 중단해도 진행분 보존 · 30일 지난 키워드는 자동 갱신 대상 · "
+            "연관어 부수확(제품·차종 인식·검색량≥10) 자동 발굴"
             + (f" · 최신 스킵 {skipped}개" if skipped and not force else "")
+            + (f" · 키워드 생성 불가 {no_kw}개 제외(차종명 확인 필요)" if no_kw else "")
         )
 
+    # 직전 스캔 결과·실패 목록(세션 한정 — rerun 후 1회 표시).
+    _last_result = st.session_state.pop("_vault_last_result", None)
+    _last_failures = st.session_state.pop("_vault_last_failures", None)
+    if _last_result is not None:
+        saved, tot = _last_result["saved"], _last_result["total"]
+        if _last_failures:
+            st.warning(f"스캔 완료 — {saved}행 저장 · 실패 {len(_last_failures)}건 (아래 목록)")
+            with st.expander(f"실패 키워드 {len(_last_failures)}건", expanded=False):
+                st.dataframe(
+                    [{"차종": f.get("model", ""), "키워드": f.get("keyword", ""),
+                      "단계": f.get("stage", ""), "원인": f.get("reason", "")}
+                     for f in _last_failures],
+                    use_container_width=True, hide_index=True,
+                )
+                st.caption("실패는 시트에 기록되지 않으며 다음 스캔에서 자동 재시도됩니다.")
+        else:
+            st.success(f"✅ 스캔 완료 — {saved}행 저장 (대상 {tot}개차종).")
+
     if run:
-        _run_vault_scan(product, todo, force)
+        _run_vault_scan(product, todo, force, all_rows)
         return   # rerun 예정(도달 안 함)
 
     # ── 뷰 ───────────────────────────────────────────────────────────────────

@@ -90,6 +90,22 @@ def test_render_vault_populated_smoke(monkeypatch):
     assert "1순위" in txt and "잠복" in txt
 
 
+def test_render_vault_failure_list_renders(monkeypatch):
+    """직전 스캔 실패 목록(세션 주입)이 경고+실패 표로 렌더된다(무예외)."""
+    _isolate_network(monkeypatch, None)
+    at = AppTest.from_file(_APP, default_timeout=60)
+    at.session_state["_authenticated"] = True
+    at.session_state["_screen_select"] = "황금 발굴함"
+    at.session_state["_vault_last_result"] = {"saved": 12, "total": 20}
+    at.session_state["_vault_last_failures"] = [
+        {"model": "셀토스", "keyword": "셀토스에어컨필터", "stage": "블로그", "reason": "RuntimeError: 429"},
+    ]
+    at.run()
+    assert not at.exception, f"실패 목록 렌더 예외: {at.exception}"
+    txt = _all_text(at)
+    assert "실패" in txt and "자동 재시도" in txt
+
+
 def test_render_vault_no_jogyeonpyo_wording(monkeypatch):
     """발굴함 화면 사용자 노출 문자열에 '조견표'가 없다(용어 규약 — 전부 '데이터')."""
     rows = [
