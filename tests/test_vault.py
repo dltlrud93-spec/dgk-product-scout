@@ -5,17 +5,22 @@ test_vault.py — 발굴함 저장소 순수부 검증(I/O 없음 — Fake works
 from __future__ import annotations
 
 from src.core.vault import (
+    EXEC_HEADER,
     VAULT_HEADER,
+    append_exec_checks,
     append_vault_rows,
     detect_demand_formation,
+    diff_exec_checks,
     executed_keywords_from_logs,
     filter_latest_rows,
+    fold_exec_checks,
     get_or_create_worksheet,
     group_vault_rows,
     latest_by_keyword,
     latest_rows,
     make_vault_row,
     new_keywords,
+    parse_exec_values,
     parse_vault_values,
     summarize_vault,
 )
@@ -275,3 +280,71 @@ def test_executed_keywords_skips_header_and_blank():
         ["t", "", "", "", "", "", ""],                                              # 빈행
     ]
     assert executed_keywords_from_logs(logs) == set()
+
+
+# ── 집행 체크 — append-only 로그 fold / diff / append ─────────────────────────
+
+def _ec(keyword, action, at="2026-02-01 09:00"):
+    return {"keyword": keyword, "action": action, "at": at}
+
+
+def test_fold_check_uncheck_check_ends_checked():
+    """체크→해제→체크 → 최종 체크(집합에 포함). 행 순서상 마지막 action 이 최종."""
+    rows = [_ec("a", "체크"), _ec("a", "해제"), _ec("a", "체크")]
+    assert fold_exec_checks(rows) == {"a"}
+
+
+def test_fold_check_then_uncheck_excluded():
+    rows = [_ec("a", "체크"), _ec("a", "해제")]
+    assert fold_exec_checks(rows) == set()
+
+
+def test_fold_empty_sheet():
+    assert fold_exec_checks([]) == set()
+
+
+def test_fold_uses_row_order_not_timestamp():
+    """★at 이 시간 역순이어도 '행 순서'(append-only) 마지막 행이 최종 상태."""
+    rows = [
+        _ec("a", "체크", at="2026-02-01 09:00"),
+        _ec("a", "해제", at="2026-01-01 09:00"),   # at 은 더 과거지만 뒤 행 → 최종=해제
+    ]
+    assert fold_exec_checks(rows) == set()
+
+
+def test_fold_parses_from_values_via_parse_exec():
+    values = [EXEC_HEADER, ["a", "체크", "t1"], ["b", "체크", "t2"], ["a", "해제", "t3"]]
+    rows = parse_exec_values(values)
+    assert fold_exec_checks(rows) == {"b"}   # a 는 해제로 끝, b 만 체크
+
+
+def test_diff_added_only():
+    assert diff_exec_checks(set(), {"a"}) == [("a", "체크")]
+
+
+def test_diff_removed_only():
+    assert diff_exec_checks({"a"}, set()) == [("a", "해제")]
+
+
+def test_diff_mixed_sorted():
+    assert diff_exec_checks({"a", "b"}, {"b", "c"}) == [("a", "해제"), ("c", "체크")]
+
+
+def test_diff_no_change_empty():
+    assert diff_exec_checks({"a", "b"}, {"a", "b"}) == []
+
+
+def test_append_exec_checks_single_batch_call():
+    ws = FakeWS([EXEC_HEADER])
+    append_exec_checks(ws, [("a", "체크"), ("b", "해제")], at="2026-02-01 09:00")
+    assert ws.append_rows_calls == 1        # ★행당 아님 — 묶음 1회
+    assert ws.rows[-2:] == [
+        ["a", "체크", "2026-02-01 09:00"],
+        ["b", "해제", "2026-02-01 09:00"],
+    ]
+
+
+def test_append_exec_checks_empty_is_noop():
+    ws = FakeWS([EXEC_HEADER])
+    append_exec_checks(ws, [])
+    assert ws.append_rows_calls == 0

@@ -161,6 +161,85 @@ def read_vault(*, sheet_id: Optional[str] = None, creds=None) -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# 집행 체크 — 수동 판정(발굴함과 같은 문서의 '집행체크' 워크시트, append-only 로그)
+# ═══════════════════════════════════════════════════════════════════════════════
+# URL 이력 자동 판정을 폐지하고 사용자가 직접 체크/해제한다. append-only 인 이유:
+#   파괴적 재작성(셀 덮어쓰기·삭제) 금지 · 변경 이력 보존 — 발굴함 탭과 동일 규약.
+#   최종 상태는 fold_exec_checks 가 '키워드별 마지막 action' 으로 접어 계산한다.
+
+EXEC_WORKSHEET = "집행체크"
+EXEC_HEADER = ["keyword", "action", "at"]   # action ∈ "체크"|"해제", at = now_kst_str()
+
+
+def open_exec_worksheet(*, sheet_id: Optional[str] = None, creds=None):
+    """'집행체크' 워크시트를 연다(없으면 생성 + 헤더). 시트 ID 미설정이면 None(발굴함 탭과 동일 패턴)."""
+    sid = _resolve_log_sheet_id(sheet_id)
+    if not sid:
+        return None
+    from src.core.jogyeonpyo import _authorize  # 인증 재사용(지연 import)
+
+    ss = _authorize(creds).open_by_key(sid)
+    return get_or_create_worksheet(ss, EXEC_WORKSHEET, EXEC_HEADER)
+
+
+def parse_exec_values(values: list) -> list[dict]:
+    """get_all_values() → 집행체크 행 dict 리스트(순수). 헤더 행 제외, 부족 셀은 ''."""
+    non_empty = _non_empty_rows(values)
+    if not non_empty:
+        return []
+    body = non_empty[1:] if non_empty[0] == EXEC_HEADER else non_empty
+    return [
+        {h: (row[i] if i < len(row) else "") for i, h in enumerate(EXEC_HEADER)}
+        for row in body
+    ]
+
+
+def read_exec_checks(*, sheet_id: Optional[str] = None, creds=None) -> list[dict]:
+    """집행체크 로그 전체 행을 dict 리스트로 읽는다. 시트 미설정이면 []. I/O 예외는 호출부 처리."""
+    ws = open_exec_worksheet(sheet_id=sheet_id, creds=creds)
+    if ws is None:
+        return []
+    return parse_exec_values(ws.get_all_values())
+
+
+def fold_exec_checks(rows: list[dict]) -> set:
+    """append-only 로그 → 현재 '체크됨' 키워드 집합(순수).
+
+    ★행 순서 = 시간순(append-only) 이므로 키워드별 '마지막 행의 action' 이 최종 상태.
+    마지막 action 이 "체크" 인 키워드만 집합에 포함(해제로 끝나면 제외). 빈 키워드는 무시.
+    """
+    state: dict[str, str] = {}
+    for r in rows:
+        kw = str(r.get("keyword", "")).strip()
+        if not kw:
+            continue
+        state[kw] = str(r.get("action", "")).strip()
+    return {kw for kw, action in state.items() if action == "체크"}
+
+
+def diff_exec_checks(before: set, after: set) -> list:
+    """before→after 체크 변경 목록(정렬). 추가=(kw,"체크"), 해제=(kw,"해제"). 무변경이면 []."""
+    changes = [(kw, "체크") for kw in (after - before)]
+    changes += [(kw, "해제") for kw in (before - after)]
+    return sorted(changes)
+
+
+def append_exec_checks(ws, changes: list, at: Optional[str] = None) -> None:
+    """변경 목록 [(keyword, action), ...] → 집행체크 워크시트에 ★append_rows 1회(행당 호출 금지).
+
+    at 미지정 시 now_kst_str() 로 전체 변경에 같은 시각을 찍는다(1회 저장 = 1 시각).
+    빈 changes 는 무시(호출 0).
+    """
+    if not changes:
+        return
+    if at is None:
+        from src.core.teamp_mode import now_kst_str  # 지연 import
+
+        at = now_kst_str()
+    ws.append_rows([[kw, action, at] for kw, action in changes])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # 발굴함 뷰 순수 로직 — 칩 계산·수요형성·NEW·그룹핑·집행됨(전부 최신 행 기준)
 # ═══════════════════════════════════════════════════════════════════════════════
 

@@ -117,3 +117,30 @@ def test_render_vault_no_jogyeonpyo_wording(monkeypatch):
     at = _open_vault(monkeypatch, _FakeWS(rows))
     assert not at.exception
     assert "조견표" not in _all_text(at)
+
+
+def _has_exec_editor(at) -> bool:
+    """편집 표(집행 체크박스 열을 가진 data_editor)가 렌더됐는지."""
+    for df in at.dataframe:
+        cols = getattr(df.value, "columns", [])
+        if "집행" in list(cols):
+            return True
+    return False
+
+
+def test_render_vault_manual_check_editor_and_no_url_history(monkeypatch):
+    """집행 체크 data_editor 렌더 + 변경 0일 때 저장/취소 미노출 + 'URL 이력' 범례 부재."""
+    rows = [
+        VAULT_HEADER,
+        make_vault_row("2026-02-01 09:00", "에어컨필터", "셀토스", "셀토스에어컨필터", 1000,
+                       doc_count=50, ratio=0.05, grade="🟡 황금", recent_3m=3,
+                       opportunity_score=952, status="정상"),
+    ]
+    at = _open_vault(monkeypatch, _FakeWS(rows))
+    assert not at.exception, f"render_vault 예외: {at.exception}"
+    assert _has_exec_editor(at)                       # 집행 체크 편집 표 존재
+    labels = {b.label for b in at.button}
+    assert "💾 저장" not in labels and "↩ 취소" not in labels   # 변경 0 → 미노출
+    txt = _all_text(at)
+    assert "URL 이력" not in txt                       # 자동 판정 폐지 — 범례 문구 부재
+    assert "직접 체크" in txt                           # 신규 범례

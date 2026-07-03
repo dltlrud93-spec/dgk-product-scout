@@ -73,15 +73,19 @@ from src.core.jogyeonpyo import (
     read_car_models,
 )
 from src.core.vault import (
+    append_exec_checks,
     append_vault_rows,
     detect_demand_formation,
-    executed_keywords_from_logs,
+    diff_exec_checks,
     filter_latest_rows,
+    fold_exec_checks,
     format_recent_int,
     group_vault_rows,
     latest_rows as vault_latest_rows,
     new_keywords,
+    open_exec_worksheet,
     open_vault_worksheet,
+    read_exec_checks,
     read_vault,
     summarize_vault,
 )
@@ -1167,13 +1171,16 @@ def _read_vault_cached() -> list[dict]:
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def _executed_kw_cached() -> frozenset:
-    """URL 이력 → 집행된 키워드 집합(제품·차종 컬럼 → build_keyword 재구성). 실패 시 빈 집합."""
+def _exec_checked_cached() -> frozenset:
+    """집행체크 워크시트(append-only 로그) → 현재 '체크됨' 키워드 집합. 실패 시 빈 집합.
+
+    URL 이력 자동 판정은 폐지 — 사용자가 직접 체크/해제한 것만 집행됨으로 본다.
+    (url_log 로깅은 성과분석용으로 계속 · executed_keywords_from_logs 는 미사용 보존.)
+    """
     try:
-        logs = fetch_recent_logs(1_000_000)   # 전체(reverse 정렬 무관 — 집합만 필요)
-    except Exception:  # noqa: BLE001
+        return frozenset(fold_exec_checks(read_exec_checks()))
+    except Exception:  # noqa: BLE001 — 시트/인증 실패는 빈 집합(화면은 그대로)
         return frozenset()
-    return frozenset(executed_keywords_from_logs(logs))
 
 
 def _vault_disp_row(r: dict, new_set: set, formation_set: set, executed: frozenset) -> dict:
@@ -1206,13 +1213,56 @@ def _vault_disp_row(r: dict, new_set: set, formation_set: set, executed: frozens
 _VAULT_COL_ORDER = ["키워드", "기회 점수", "검색량", "문서수", "비율", "최근3개월", "스캔일", "비고"]
 
 
-def _vault_group_df(group_rows: list, new_set: set, formation_set: set, executed: frozenset) -> None:
+def _vault_group_df(group_rows: list, new_set: set, formation_set: set, checked: frozenset) -> None:
+    """읽기 전용 표(잠복 그룹용)."""
     st.dataframe(
-        [_vault_disp_row(r, new_set, formation_set, executed) for r in group_rows],
+        [_vault_disp_row(r, new_set, formation_set, checked) for r in group_rows],
         use_container_width=True,
         hide_index=True,
         column_order=_VAULT_COL_ORDER,
     )
+
+
+_VAULT_EDITOR_KEYS = ("vault_ed_gold", "vault_ed_ok", "vault_ed_sat")
+
+
+def _vault_group_editor(group_rows: list, new_set: set, formation_set: set,
+                        checked: frozenset, key: str) -> set:
+    """편집 표(황금·해볼만·포화) — 맨 앞 '집행' 체크박스만 편집 가능.
+
+    반환: 이 그룹에서 체크된 키워드 집합(화면 행 한정). 행 정체성 = '키워드' 컬럼.
+    """
+    if not group_rows:
+        st.caption("해당 없음")
+        return set()
+    data = []
+    for r in group_rows:
+        disp = _vault_disp_row(r, new_set, formation_set, checked)
+        data.append({"집행": disp["키워드"] in checked, **disp})
+    edited = st.data_editor(
+        data,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        column_order=["집행"] + _VAULT_COL_ORDER,
+        column_config={
+            "집행": st.column_config.CheckboxColumn(
+                "집행", help="집행 여부 — 아래 저장 버튼으로 확정", default=False),
+        },
+        disabled=_VAULT_COL_ORDER,   # 집행 외 전 컬럼 읽기 전용
+        key=key,
+    )
+    records = edited.to_dict("records") if hasattr(edited, "to_dict") else edited
+    return {str(row.get("키워드", "")).strip() for row in records if row.get("집행")}
+
+
+def _vault_has_pending_edits() -> bool:
+    """세 에디터에 미저장 편집(edited_rows)이 있는지 — 필터 변경 경고용 간단 안전장치."""
+    for k in _VAULT_EDITOR_KEYS:
+        state = st.session_state.get(k)
+        if isinstance(state, dict) and state.get("edited_rows"):
+            return True
+    return False
 
 
 def _run_vault_scan(product_label: str, todo: list, force: bool, vault_rows: list) -> None:
@@ -1303,13 +1353,12 @@ def render_vault() -> None:
         "잠복(검색량<10) 차종도 기록해 두었다가 재스캔 시 수요 형성을 자동 감지합니다."
     )
 
-    # ── 발굴함·집행 이력 읽기(캐시) ──────────────────────────────────────────
+    # ── 발굴함 읽기(캐시) — 집행 체크는 뷰에서 별도 로드 ──────────────────────
     try:
         all_rows = _read_vault_cached()
     except Exception as e:  # noqa: BLE001
         st.error(f"발굴함 읽기 실패: {type(e).__name__}: {e}")
         all_rows = []
-    executed = _executed_kw_cached()
 
     # ── 컨트롤 카드 ──────────────────────────────────────────────────────────
     with st.container(border=True):
@@ -1373,11 +1422,15 @@ def render_vault() -> None:
         return   # rerun 예정(도달 안 함)
 
     # ── 뷰 ───────────────────────────────────────────────────────────────────
+    _saved_n = st.session_state.pop("_vault_exec_saved", None)
+    if _saved_n:
+        st.success(f"✅ 집행 체크 {_saved_n}건 저장 완료")
+
     col_f, col_r = st.columns([4, 1])
     with col_r:
-        if st.button("🔄 새로고침", key="vault_refresh", help="발굴함·집행 이력 캐시를 비우고 다시 읽습니다."):
+        if st.button("🔄 새로고침", key="vault_refresh", help="발굴함·집행체크 캐시를 비우고 다시 읽습니다."):
             _read_vault_cached.clear()
-            _executed_kw_cached.clear()
+            _exec_checked_cached.clear()
             st.rerun()
 
     if not all_rows:
@@ -1385,6 +1438,7 @@ def render_vault() -> None:
         st.caption("원본: 구글시트 '발굴함' 탭 — 영구 저장")
         return
 
+    checked = _exec_checked_cached()   # 현재 '체크됨' 키워드 집합(수동 판정)
     latest = vault_latest_rows(all_rows)
     new_set = new_keywords(all_rows)
     formation = detect_demand_formation(all_rows)
@@ -1398,14 +1452,16 @@ def render_vault() -> None:
                 "제품 필터", ["전체"] + _VAULT_PRODUCTS, key="vault_view_product", horizontal=True)
         with fc2:
             exclude_exec = st.checkbox("집행됨 제외", value=False, key="vault_exclude_exec")
+        if _vault_has_pending_edits():
+            st.caption("⚠️ 저장 전 변경이 있습니다 — 필터를 바꾸면 사라집니다.")
 
     # 제품 필터는 product_kw 기준 매칭(라벨→접미사)
     prod_filter = None if view_product == "전체" else config.JOGYEONPYO_PRODUCTS[view_product]["product_kw"]
     shown = filter_latest_rows(
-        latest, product=prod_filter, exclude_executed=exclude_exec, executed=executed)
+        latest, product=prod_filter, exclude_executed=exclude_exec, executed=checked)
 
-    # 요약 칩(필터 반영)
-    summ = summarize_vault(shown, executed=executed)
+    # 요약 칩(필터 반영, 집행됨 = 체크 집합 기준)
+    summ = summarize_vault(shown, executed=checked)
     _chips([
         ("전체", str(summ["total"])),
         ("🟡 황금", str(summ["gold"])),
@@ -1421,37 +1477,57 @@ def render_vault() -> None:
         more = f" 외 {len(formation) - 8}건" if len(formation) > 8 else ""
         st.success(f"📈 수요 형성 {len(formation)}건: {msg}{more} — 잠복→검색량 형성된 키워드입니다.")
 
-    st.caption("🆕 NEW = 발굴함 첫 등장 · 📈 수요형성 = 직전 잠복→최신 정상 · ✅ 집행됨 = URL 이력에 존재")
+    st.caption("🆕 NEW = 발굴함 첫 등장 · 📈 수요형성 = 직전 잠복→최신 정상 · "
+               "✅ 집행됨 = 직접 체크 (저장 버튼으로 확정)")
     st.divider()
 
     gold, ok, saturated, dormant = group_vault_rows(shown)
 
     st.subheader(f"🟡 1순위 · 황금 — 지금 집행 ({len(gold)}개)")
-    if gold:
-        _vault_group_df(gold, new_set, formation_set, executed)
-    else:
-        st.caption("해당 없음")
+    checked_gold = _vault_group_editor(gold, new_set, formation_set, checked, "vault_ed_gold")
 
     st.subheader(f"🟢 2순위 · 해볼만 — 대기열 ({len(ok)}개)")
-    if ok:
-        _vault_group_df(ok, new_set, formation_set, executed)
-    else:
-        st.caption("해당 없음")
+    checked_ok = _vault_group_editor(ok, new_set, formation_set, checked, "vault_ed_ok")
 
     with st.expander(f"🔴 3순위 · 포화 — 후순위 · 대체로 비추천 ({len(saturated)}개)", expanded=False):
-        if saturated:
-            _vault_group_df(saturated, new_set, formation_set, executed)
-        else:
-            st.caption("해당 없음")
+        checked_sat = _vault_group_editor(saturated, new_set, formation_set, checked, "vault_ed_sat")
 
     with st.expander(f"💤 잠복 — 검색량<10 (재스캔 시 수요 형성 자동 감지) ({len(dormant)}개)", expanded=False):
         st.caption("재스캔 시 수요 형성 자동 감지 — 지금은 검색 수요가 미형성된 차종입니다.")
         if dormant:
-            _vault_group_df(dormant, new_set, formation_set, executed)
+            _vault_group_df(dormant, new_set, formation_set, checked)
         else:
             st.caption("해당 없음")
 
-    st.caption("원본: 구글시트 '발굴함' 탭 — 영구 저장")
+    # 편집 diff — 화면(편집 가능 3그룹) 행 한정 편집 + 나머지는 before 유지.
+    before = set(checked)
+    visible = {str(r.get("keyword", "")).strip() for r in (gold + ok + saturated)}
+    after = (before - visible) | (checked_gold | checked_ok | checked_sat)
+    changes = diff_exec_checks(before, after)
+
+    if changes:
+        st.warning(f"저장 전 변경 {len(changes)}건")
+        bc1, bc2, _bc3 = st.columns([1, 1, 4])
+        if bc1.button("💾 저장", key="vault_exec_save", type="primary"):
+            try:
+                ws = open_exec_worksheet()
+                if ws is None:
+                    st.error("집행체크 저장 위치가 없습니다 — url_log_sheet_id(또는 URL_LOG_SHEET_ID) 설정 필요.")
+                else:
+                    append_exec_checks(ws, changes)
+                    _exec_checked_cached.clear()
+                    for k in _VAULT_EDITOR_KEYS:
+                        st.session_state.pop(k, None)
+                    st.session_state["_vault_exec_saved"] = len(changes)
+                    st.rerun()
+            except Exception as e:  # noqa: BLE001
+                st.error(f"집행체크 저장 실패: {type(e).__name__}: {e}")
+        if bc2.button("↩ 취소", key="vault_exec_cancel"):
+            for k in _VAULT_EDITOR_KEYS:
+                st.session_state.pop(k, None)
+            st.rerun()   # 시트 무접촉
+
+    st.caption("원본: 구글시트 '발굴함' 탭 · 집행 판정: '집행체크' 탭(직접 체크 → 저장) — 영구 저장")
 
 
 def render_teamp() -> None:
