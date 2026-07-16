@@ -50,7 +50,7 @@ from src.core.car_demand import (
 )
 from src.core.car_models import load_car_models
 
-_DATALAB_URL = "https://naverapihub.apigw.ntruss.com/datalab/v1/search"
+_DATALAB_URL = "https://naverapihub.apigw.ntruss.com/search-trend/v1/search"
 
 
 def _datalab_creds() -> tuple[str, str]:

@@ -2764,12 +2764,11 @@ def render_campaign_analytics() -> None:
 # 사이드바 화면 선택 → 디스패치
 # ═══════════════════════════════════════════════════════════════════════════
 st.sidebar.markdown("**화면 선택**")
-# 네이버 Search Trend(데이터랩) 2026년 7월 종료 예정 → 차종수요·계절제품이 404/구독오류로 실패.
-# 부가 기능이라 화면만 숨김. NAVER API Hub 새 트렌드 API 이관 시 아래 목록에 "차종 수요"·"계절 제품"
-# 문자열만 재추가하면 복구됨(render 함수·데이터랩 코드는 보존).
+# 차종수요·계절제품: 구 데이터랩(openapi.naver.com) 종료 → NAVER API Hub search-trend로 이관 완료
+# (POST naverapihub.apigw.ntruss.com/search-trend/v1/search, 헤더·바디·응답 동일). 두 화면 복구.
 _SCREEN = st.sidebar.radio(
     "화면 선택",
-    ["키워드 탐색기", "체험단 타겟", "황금 발굴함", "체험단 양식",
+    ["차종 수요", "계절 제품", "키워드 탐색기", "체험단 타겟", "황금 발굴함", "체험단 양식",
      "체험단 성과 분석"],
     label_visibility="collapsed",
     key="_screen_select",
@@ -2779,8 +2778,7 @@ st.sidebar.divider()
 # 전 화면 공통 색감(흰 카드·청회색 배경·파란 포인트) — 화면 분기 전 1회 주입.
 _inject_global_css()
 
-# 데이터랩 종료 예정으로 화면 숨김 — 새 트렌드 API 이관 시 위 목록에 문자열만 재추가하면 복구.
-# (라디오 목록에서 빠져 아래 두 분기는 현재 도달 불가. render 함수는 보존.)
+# 차종수요·계절제품: Hub search-trend 이관 완료로 복구(라디오 목록·아래 분기 모두 활성).
 if _SCREEN == "차종 수요":
     render_car_demand()
 elif _SCREEN == "계절 제품":
