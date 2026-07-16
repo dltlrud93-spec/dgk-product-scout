@@ -5,7 +5,7 @@ teamp_mode.py — 체험단 타겟 선정 모드 코어.
   검색량(합산) + 블로그 문서수 + 비율 → 황금/해볼만/포화 3분류.
 
 블로그 문서수:
-  네이버 블로그 검색 API(GET https://openapi.naver.com/v1/search/blog.json)
+  네이버 블로그 검색 API(GET https://naverapihub.apigw.ntruss.com/search/v1/blog)
   "{차종 표시명} {product}" 쿼리 → 응답 total 값.
   ★ total 은 근사치이고 블로그 노출 난이도(블로그 지수)와 다름 — 우선순위 신호이지 노출 보증 아님.
 
@@ -203,8 +203,8 @@ def fetch_recent_blog_count(
                 "sort": "date",
             },
             headers={
-                "X-Naver-Client-Id": client_id,
-                "X-Naver-Client-Secret": client_secret,
+                "X-NCP-APIGW-API-KEY-ID": client_id,
+                "X-NCP-APIGW-API-KEY": client_secret,
             },
             timeout=10,
         )
@@ -259,8 +259,8 @@ def fetch_blog_count(
             config.NAVER_BLOG_SEARCH_URL,
             params={"query": query, "display": config.NAVER_BLOG_SEARCH_DISPLAY},
             headers={
-                "X-Naver-Client-Id": client_id,
-                "X-Naver-Client-Secret": client_secret,
+                "X-NCP-APIGW-API-KEY-ID": client_id,
+                "X-NCP-APIGW-API-KEY": client_secret,
             },
             timeout=10,
         )
@@ -319,8 +319,8 @@ def fetch_blog_titles(
             config.NAVER_BLOG_SEARCH_URL,
             params={"query": query, "display": display},
             headers={
-                "X-Naver-Client-Id": client_id,
-                "X-Naver-Client-Secret": client_secret,
+                "X-NCP-APIGW-API-KEY-ID": client_id,
+                "X-NCP-APIGW-API-KEY": client_secret,
             },
             timeout=10,
         )

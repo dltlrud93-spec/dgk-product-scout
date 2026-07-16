@@ -268,10 +268,11 @@ TEAMP_RATIO_OK   = 3.0   # 1.0 ≤ 비율 ≤ 3.0 → 🟢 해볼만, 초과 →
 # 기회 점수(EV)의 상위노출 진입 난이도 상수. 검산상 300~3000 범위에서 순위 둔감 — 튜닝 금지.
 TEAMP_EV_K = 1000
 
-# 네이버 블로그 검색 API (openapi.naver.com). 키: NAVER_CLIENT_ID/NAVER_CLIENT_SECRET (데이터랩 공통).
+# 네이버 블로그 검색 API (NAVER API Hub, naverapihub.apigw.ntruss.com). 키: NAVER_CLIENT_ID/NAVER_CLIENT_SECRET.
+# 인증 헤더: X-NCP-APIGW-API-KEY-ID / X-NCP-APIGW-API-KEY (값 소스는 위 키 그대로, teamp_mode 참조).
 # total 값만 필요 → display=1 로 문서 1건만 받아 처리량 최소화.
 # 처리한도 25,000/일(차종 수십 × 제품 수개는 충분히 여유). 캐싱(ttl=3600)으로 재호출 방지.
-NAVER_BLOG_SEARCH_URL = "https://openapi.naver.com/v1/search/blog.json"
+NAVER_BLOG_SEARCH_URL = "https://naverapihub.apigw.ntruss.com/search/v1/blog"
 NAVER_BLOG_SEARCH_DISPLAY = 1
 # 429 방지(블로그 검색 API): max_workers 10→3 으로 낮추고 호출 전 지연 추가.
 # 근거: 10개 동시 호출 → 429 확인. 3개×0.1s 지연 = 실효 ~10req/s(API 응답지연 ~0.3s 감안).
