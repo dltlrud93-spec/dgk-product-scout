@@ -50,7 +50,7 @@ from src.core.car_demand import (
 )
 from src.core.car_models import load_car_models
 
-_DATALAB_URL = "https://openapi.naver.com/v1/datalab/search"
+_DATALAB_URL = "https://naverapihub.apigw.ntruss.com/datalab/v1/search"
 
 
 def _datalab_creds() -> tuple[str, str]:
@@ -75,8 +75,8 @@ def _request_datalab(groups: list[dict], start: str, end: str, cid: str, csec: s
     body = json.dumps({"startDate": start, "endDate": end, "timeUnit": "month",
                        "keywordGroups": groups}).encode("utf-8")
     req = urllib.request.Request(_DATALAB_URL, data=body, method="POST")
-    req.add_header("X-Naver-Client-Id", cid)
-    req.add_header("X-Naver-Client-Secret", csec)
+    req.add_header("X-NCP-APIGW-API-KEY-ID", cid)
+    req.add_header("X-NCP-APIGW-API-KEY", csec)
     req.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:

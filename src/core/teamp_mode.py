@@ -201,6 +201,7 @@ def fetch_recent_blog_count(
                 "query": query,
                 "display": config.NAVER_BLOG_SEARCH_RECENT_DISPLAY,
                 "sort": "date",
+                "format": "json",
             },
             headers={
                 "X-NCP-APIGW-API-KEY-ID": client_id,
@@ -257,7 +258,7 @@ def fetch_blog_count(
     for attempt in range(max_retries + 1):
         resp = _get(
             config.NAVER_BLOG_SEARCH_URL,
-            params={"query": query, "display": config.NAVER_BLOG_SEARCH_DISPLAY},
+            params={"query": query, "display": config.NAVER_BLOG_SEARCH_DISPLAY, "format": "json"},
             headers={
                 "X-NCP-APIGW-API-KEY-ID": client_id,
                 "X-NCP-APIGW-API-KEY": client_secret,
@@ -317,7 +318,7 @@ def fetch_blog_titles(
     for attempt in range(max_retries + 1):
         resp = _get(
             config.NAVER_BLOG_SEARCH_URL,
-            params={"query": query, "display": display},
+            params={"query": query, "display": display, "format": "json"},
             headers={
                 "X-NCP-APIGW-API-KEY-ID": client_id,
                 "X-NCP-APIGW-API-KEY": client_secret,
